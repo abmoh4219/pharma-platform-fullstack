@@ -52,6 +52,7 @@ run_step "Wait for backend API" wait_for_backend
 run_step "API login test" bash "$API_TEST_DIR/login_test.sh"
 run_step "API recruitment search test" bash "$API_TEST_DIR/recruitment_search_test.sh"
 run_step "API case creation test" bash "$API_TEST_DIR/case_creation_test.sh"
+run_step "API security negative test" bash "$API_TEST_DIR/security_negative_test.sh"
 
 echo ""
 echo "=============================="

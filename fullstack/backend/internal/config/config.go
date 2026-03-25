@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 )
 
 type Config struct {
@@ -20,6 +21,8 @@ type Config struct {
 	UploadDir     string
 	UploadTmpDir  string
 	MaxUploadMB   int64
+	RateLimitRPM  int
+	CORSOrigins   []string
 }
 
 func Load() (Config, error) {
@@ -37,6 +40,10 @@ func Load() (Config, error) {
 		UploadDir:     getEnv("UPLOAD_DIR", "storage/uploads"),
 		UploadTmpDir:  getEnv("UPLOAD_TMP_DIR", "storage/tmp"),
 		MaxUploadMB:   getEnvInt64("MAX_UPLOAD_MB", 20),
+		RateLimitRPM:  getEnvInt("RATE_LIMIT_RPM", 240),
+		CORSOrigins: parseCSVEnv(
+			getEnv("CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"),
+		),
 	}
 
 	if cfg.JWTExpHours <= 0 {
@@ -44,6 +51,9 @@ func Load() (Config, error) {
 	}
 	if cfg.MaxUploadMB <= 0 {
 		return Config{}, fmt.Errorf("MAX_UPLOAD_MB must be greater than 0")
+	}
+	if cfg.RateLimitRPM <= 0 {
+		return Config{}, fmt.Errorf("RATE_LIMIT_RPM must be greater than 0")
 	}
 
 	return cfg, nil
@@ -78,4 +88,16 @@ func getEnvInt64(key string, fallback int64) int64 {
 		return fallback
 	}
 	return parsed
+}
+
+func parseCSVEnv(value string) []string {
+	raw := strings.Split(value, ",")
+	items := make([]string, 0, len(raw))
+	for _, item := range raw {
+		trimmed := strings.TrimSpace(item)
+		if trimmed != "" {
+			items = append(items, trimmed)
+		}
+	}
+	return items
 }

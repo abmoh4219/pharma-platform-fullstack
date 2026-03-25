@@ -66,8 +66,8 @@ func (a *API) Me(c *gin.Context) {
 }
 
 type loginRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Username string `json:"username" binding:"required,min=1,max=64"`
+	Password string `json:"password" binding:"required,min=8,max=128"`
 }
 
 func (a *API) Login(c *gin.Context) {
@@ -76,10 +76,7 @@ func (a *API) Login(c *gin.Context) {
 		badRequest(c, "INVALID_PAYLOAD", "invalid login payload")
 		return
 	}
-	if len(req.Password) < 8 {
-		badRequest(c, "PASSWORD_TOO_SHORT", "password must be at least 8 characters")
-		return
-	}
+	req.Username = strings.TrimSpace(req.Username)
 
 	const query = `
 		SELECT u.id, u.username, u.full_name, u.password_hash, r.code, ds.id, ds.institution, ds.department, ds.team

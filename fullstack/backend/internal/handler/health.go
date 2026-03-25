@@ -25,7 +25,7 @@ func (h HealthHandler) GetHealth(c *gin.Context) {
 		status = "degraded"
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	writeSuccess(c, http.StatusOK, gin.H{
 		"status":   status,
 		"database": dbStatus,
 		"service":  "go-backend",

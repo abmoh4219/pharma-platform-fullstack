@@ -53,20 +53,38 @@ func (a *API) ListAuditLogs(c *gin.Context) {
 		whereParts = append(whereParts, "al.created_at >= ?")
 		args = append(args, fromTime)
 	}
+	var toTimeParsed time.Time
 	if toFilter != "" {
 		toTime, err := time.Parse("2006-01-02", toFilter)
 		if err != nil {
 			badRequest(c, "INVALID_TO", "to must be YYYY-MM-DD")
 			return
 		}
+		toTimeParsed = toTime
 		whereParts = append(whereParts, "al.created_at < ?")
 		args = append(args, toTime.Add(24*time.Hour))
 	}
+	if fromFilter != "" && toFilter != "" {
+		fromTime, _ := time.Parse("2006-01-02", fromFilter)
+		if toTimeParsed.Before(fromTime) {
+			badRequest(c, "INVALID_DATE_RANGE", "to must be greater than or equal to from")
+			return
+		}
+	}
 
-	page := parsePositiveInt(c.Query("page"), 1)
-	size := parsePositiveInt(c.Query("size"), 20)
+	page, err := parsePositiveIntStrict(c.Query("page"), 1)
+	if err != nil {
+		badRequest(c, "INVALID_PAGE", "page must be a positive integer")
+		return
+	}
+	size, err := parsePositiveIntStrict(c.Query("size"), 20)
+	if err != nil {
+		badRequest(c, "INVALID_SIZE", "size must be a positive integer")
+		return
+	}
 	if size > 100 {
-		size = 100
+		badRequest(c, "INVALID_SIZE", "size must be less than or equal to 100")
+		return
 	}
 	offset := (page - 1) * size
 
@@ -203,13 +221,16 @@ func (a *API) ExportAuditLogs(c *gin.Context) {
 	c.String(http.StatusOK, buf.String())
 }
 
-func parsePositiveInt(raw string, fallback int) int {
+func parsePositiveIntStrict(raw string, fallback int) (int, error) {
 	if strings.TrimSpace(raw) == "" {
-		return fallback
+		return fallback, nil
 	}
 	value, err := strconv.Atoi(raw)
-	if err != nil || value <= 0 {
-		return fallback
+	if err != nil {
+		return 0, err
 	}
-	return value
+	if value <= 0 {
+		return 0, strconv.ErrSyntax
+	}
+	return value, nil
 }

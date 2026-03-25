@@ -54,6 +54,23 @@ docker compose down && docker compose up --build
 ./run_tests.sh
 ```
 
+## Security & Validation
+- Error response format (standardized):
+  - `{"success": false, "error": "message", "code": "ERROR_CODE"}`
+- Validation strategy:
+  - Gin binding + validation tags are enforced for body/query inputs.
+  - Unknown JSON fields are rejected by the backend decoder.
+  - Critical query/path parameters (IDs, status, pagination, date filters) are validated before execution.
+- Security measures:
+  - JWT authentication with strict token parsing and explicit expired/invalid handling.
+  - Logout token invalidation with blacklist checks on protected routes.
+  - RBAC + data-scope enforcement middleware across protected modules.
+  - IP-based rate limiting middleware for API protection.
+  - Security headers middleware (CSP, frame protection, XSS/content-type hardening, permission policy) + restricted CORS origins.
+  - Consistent JSON errors for auth failures, unknown routes/methods, and panic recovery paths.
+  - Gin trusted-proxy hardening (`SetTrustedProxies(nil)`) to prevent unsafe proxy trust defaults.
+  - Request context logging with request ID, method, path, status, latency, and client IP.
+
 ## Project Notes
 - Schema + seed data: `backend/migrations/init.sql`
 - Seeded roles: business_specialist, compliance_admin, recruitment_specialist, system_admin

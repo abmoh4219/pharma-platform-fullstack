@@ -33,12 +33,12 @@ var allowedUploadExt = map[string]struct{}{
 }
 
 type uploadInitRequest struct {
-	ModuleName   string `json:"module_name"`
-	RecordID     int64  `json:"record_id"`
-	OriginalName string `json:"original_name"`
-	MimeType     string `json:"mime_type"`
-	TotalChunks  int    `json:"total_chunks"`
-	FileSize     int64  `json:"file_size"`
+	ModuleName   string `json:"module_name" binding:"required,oneof=case_ledgers candidates qualifications restrictions positions"`
+	RecordID     int64  `json:"record_id" binding:"required,gte=1"`
+	OriginalName string `json:"original_name" binding:"required,min=1,max=255"`
+	MimeType     string `json:"mime_type" binding:"omitempty,max=128"`
+	TotalChunks  int    `json:"total_chunks" binding:"required,gte=1,lte=5000"`
+	FileSize     int64  `json:"file_size" binding:"required,gte=1"`
 }
 
 func (a *API) InitiateUpload(c *gin.Context) {
@@ -98,6 +98,7 @@ func (a *API) InitiateUpload(c *gin.Context) {
 }
 
 func (a *API) UploadChunk(c *gin.Context) {
+	user, _ := middleware.GetAuthUser(c)
 	uploadID := strings.TrimSpace(c.PostForm("upload_id"))
 	chunkIndexStr := strings.TrimSpace(c.PostForm("chunk_index"))
 	if uploadID == "" || chunkIndexStr == "" {
@@ -117,6 +118,14 @@ func (a *API) UploadChunk(c *gin.Context) {
 	}
 	if session.Status != "in_progress" {
 		writeError(c, http.StatusConflict, "UPLOAD_NOT_ACTIVE", "upload session is not active")
+		return
+	}
+	if session.UploadedBy != user.ID && user.Role != "system_admin" {
+		writeError(c, http.StatusForbidden, "FORBIDDEN", "upload session is outside your ownership")
+		return
+	}
+	if !a.canAccessModuleRecord(user, session.ModuleName, session.RecordID) {
+		writeError(c, http.StatusForbidden, "FORBIDDEN", "record is outside your data scope")
 		return
 	}
 	if chunkIndex >= session.TotalChunks {
@@ -183,7 +192,7 @@ func (a *API) UploadChunk(c *gin.Context) {
 }
 
 type uploadCompleteRequest struct {
-	UploadID string `json:"upload_id"`
+	UploadID string `json:"upload_id" binding:"required,min=1,max=64"`
 }
 
 func (a *API) CompleteUpload(c *gin.Context) {
@@ -210,6 +219,10 @@ func (a *API) CompleteUpload(c *gin.Context) {
 	}
 	if session.Status != "in_progress" {
 		writeError(c, http.StatusConflict, "UPLOAD_NOT_ACTIVE", "upload session is not active")
+		return
+	}
+	if session.UploadedBy != user.ID && user.Role != "system_admin" {
+		writeError(c, http.StatusForbidden, "FORBIDDEN", "upload session is outside your ownership")
 		return
 	}
 
@@ -315,6 +328,7 @@ func (a *API) CompleteUpload(c *gin.Context) {
 }
 
 func (a *API) GetUploadSession(c *gin.Context) {
+	user, _ := middleware.GetAuthUser(c)
 	uploadID := strings.TrimSpace(c.Param("id"))
 	if uploadID == "" {
 		badRequest(c, "UPLOAD_ID_REQUIRED", "upload id is required")
@@ -323,6 +337,14 @@ func (a *API) GetUploadSession(c *gin.Context) {
 	session, err := a.loadUploadSession(uploadID)
 	if err != nil {
 		writeError(c, http.StatusNotFound, "UPLOAD_SESSION_NOT_FOUND", "upload session not found")
+		return
+	}
+	if session.UploadedBy != user.ID && user.Role != "system_admin" {
+		writeError(c, http.StatusForbidden, "FORBIDDEN", "upload session is outside your ownership")
+		return
+	}
+	if !a.canAccessModuleRecord(user, session.ModuleName, session.RecordID) {
+		writeError(c, http.StatusForbidden, "FORBIDDEN", "record is outside your data scope")
 		return
 	}
 	tmpDir := filepath.Join(a.cfg.UploadTmpDir, uploadID)
@@ -378,15 +400,16 @@ type uploadSession struct {
 	TotalChunks  int
 	FileSize     int64
 	Status       string
+	UploadedBy   int64
 }
 
 func (a *API) loadUploadSession(id string) (uploadSession, error) {
 	var s uploadSession
 	err := a.db.QueryRow(`
-		SELECT id, module_name, record_id, original_name, mime_type, total_chunks, file_size, status
+		SELECT id, module_name, record_id, original_name, mime_type, total_chunks, file_size, status, uploaded_by
 		FROM upload_sessions
 		WHERE id = ?
-	`, id).Scan(&s.ID, &s.ModuleName, &s.RecordID, &s.OriginalName, &s.MimeType, &s.TotalChunks, &s.FileSize, &s.Status)
+	`, id).Scan(&s.ID, &s.ModuleName, &s.RecordID, &s.OriginalName, &s.MimeType, &s.TotalChunks, &s.FileSize, &s.Status, &s.UploadedBy)
 	if err != nil {
 		return uploadSession{}, err
 	}
@@ -410,10 +433,6 @@ func newUploadID() (string, error) {
 }
 
 func (a *API) canAccessModuleRecord(user middleware.AuthUser, module string, recordID int64) bool {
-	if user.Role == "system_admin" {
-		return true
-	}
-
 	table := ""
 	switch module {
 	case "case_ledgers":
@@ -430,9 +449,15 @@ func (a *API) canAccessModuleRecord(user middleware.AuthUser, module string, rec
 		return false
 	}
 
-	query := "SELECT COUNT(1) FROM " + table + " WHERE id = ? AND institution = ? AND department = ? AND team = ?"
+	query := "SELECT COUNT(1) FROM " + table + " WHERE id = ?"
+	args := []any{recordID}
+	if user.Role != "system_admin" {
+		query += " AND institution = ? AND department = ? AND team = ?"
+		args = append(args, user.Institution, user.Department, user.Team)
+	}
+
 	var count int
-	if err := a.db.QueryRow(query, recordID, user.Institution, user.Department, user.Team).Scan(&count); err != nil {
+	if err := a.db.QueryRow(query, args...).Scan(&count); err != nil {
 		return false
 	}
 	return count > 0

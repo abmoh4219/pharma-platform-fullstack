@@ -3,8 +3,10 @@ package router
 import (
 	"database/sql"
 	"log"
+	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gin-gonic/gin/binding"
 
 	"pharma-platform/internal/config"
 	"pharma-platform/internal/handler"
@@ -15,8 +17,29 @@ func New(cfg config.Config, db *sql.DB) *gin.Engine {
 	if cfg.AppEnv == "production" {
 		gin.SetMode(gin.ReleaseMode)
 	}
+	binding.EnableDecoderDisallowUnknownFields = true
 
-	r := gin.Default()
+	r := gin.New()
+	r.HandleMethodNotAllowed = true
+	if err := r.SetTrustedProxies(nil); err != nil {
+		log.Printf("failed to set trusted proxies: %v", err)
+	}
+
+	r.Use(
+		gin.CustomRecovery(func(c *gin.Context, recovered any) {
+			log.Printf("panic recovered: %v", recovered)
+			middleware.AbortWithError(c, http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", "internal server error")
+		}),
+		middleware.RequestContext(),
+		middleware.SecurityHeaders(cfg.CORSOrigins),
+		middleware.NewIPRateLimiter(cfg.RateLimitRPM).Middleware(),
+	)
+	r.NoRoute(func(c *gin.Context) {
+		middleware.AbortWithError(c, http.StatusNotFound, "NOT_FOUND", "route not found")
+	})
+	r.NoMethod(func(c *gin.Context) {
+		middleware.AbortWithError(c, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed")
+	})
 
 	apiHandler, err := handler.NewAPI(cfg, db)
 	if err != nil {

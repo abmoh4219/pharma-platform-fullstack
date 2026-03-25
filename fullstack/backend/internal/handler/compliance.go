@@ -15,13 +15,13 @@ import (
 )
 
 type qualificationRequest struct {
-	EntityType        string `json:"entity_type"`
-	EntityName        string `json:"entity_name"`
-	QualificationCode string `json:"qualification_code"`
-	IssueDate         string `json:"issue_date"`
-	ExpiryDate        string `json:"expiry_date"`
-	Status            string `json:"status"`
-	Notes             string `json:"notes"`
+	EntityType        string `json:"entity_type" binding:"required,oneof=client supplier"`
+	EntityName        string `json:"entity_name" binding:"required,min=1,max=128"`
+	QualificationCode string `json:"qualification_code" binding:"required,min=1,max=128"`
+	IssueDate         string `json:"issue_date" binding:"required,datetime=2006-01-02"`
+	ExpiryDate        string `json:"expiry_date" binding:"required,datetime=2006-01-02"`
+	Status            string `json:"status" binding:"omitempty,oneof=active inactive"`
+	Notes             string `json:"notes" binding:"max=2000"`
 }
 
 func (a *API) CreateQualification(c *gin.Context) {
@@ -31,15 +31,6 @@ func (a *API) CreateQualification(c *gin.Context) {
 		badRequest(c, "INVALID_PAYLOAD", "invalid qualification payload")
 		return
 	}
-	if strings.TrimSpace(req.EntityType) == "" || strings.TrimSpace(req.EntityName) == "" || strings.TrimSpace(req.QualificationCode) == "" {
-		badRequest(c, "MISSING_REQUIRED_FIELDS", "entity_type, entity_name and qualification_code are required")
-		return
-	}
-	if req.EntityType != "client" && req.EntityType != "supplier" {
-		badRequest(c, "INVALID_ENTITY_TYPE", "entity_type must be client or supplier")
-		return
-	}
-
 	issueDate, err := parseDate(req.IssueDate)
 	if err != nil {
 		badRequest(c, "INVALID_ISSUE_DATE", "issue_date must be YYYY-MM-DD")
@@ -174,6 +165,10 @@ func (a *API) UpdateQualification(c *gin.Context) {
 		badRequest(c, "INVALID_PAYLOAD", "invalid qualification payload")
 		return
 	}
+	if req.EntityType != "client" && req.EntityType != "supplier" {
+		badRequest(c, "INVALID_ENTITY_TYPE", "entity_type must be client or supplier")
+		return
+	}
 
 	issueDate, err := parseDate(req.IssueDate)
 	if err != nil {
@@ -249,9 +244,9 @@ func (a *API) DeleteQualification(c *gin.Context) {
 }
 
 type restrictionRequest struct {
-	MedName          string  `json:"med_name"`
-	RuleType         string  `json:"rule_type"`
-	MaxQuantity      float64 `json:"max_quantity"`
+	MedName          string  `json:"med_name" binding:"required,min=1,max=128"`
+	RuleType         string  `json:"rule_type" binding:"required,min=1,max=64"`
+	MaxQuantity      float64 `json:"max_quantity" binding:"required,gt=0"`
 	RequiresApproval bool    `json:"requires_approval"`
 	IsActive         bool    `json:"is_active"`
 }
@@ -402,8 +397,8 @@ func (a *API) DeleteRestriction(c *gin.Context) {
 }
 
 type restrictionCheckRequest struct {
-	MedName  string  `json:"med_name"`
-	Quantity float64 `json:"quantity"`
+	MedName  string  `json:"med_name" binding:"required,min=1,max=128"`
+	Quantity float64 `json:"quantity" binding:"required,gt=0"`
 }
 
 func (a *API) CheckRestriction(c *gin.Context) {

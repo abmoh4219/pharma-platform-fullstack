@@ -14,8 +14,8 @@ import (
 )
 
 type caseCreateRequest struct {
-	Subject     string `json:"subject"`
-	Description string `json:"description"`
+	Subject     string `json:"subject" binding:"required,min=1,max=200"`
+	Description string `json:"description" binding:"required,min=1,max=4000"`
 }
 
 func (a *API) CreateCase(c *gin.Context) {
@@ -97,8 +97,16 @@ func leftPadInt(v int, width int) string {
 
 func (a *API) ListCases(c *gin.Context) {
 	user, _ := middleware.GetAuthUser(c)
-	statusFilter := strings.TrimSpace(c.Query("status"))
-	q := strings.TrimSpace(strings.ToLower(c.Query("q")))
+	var query struct {
+		Status string `form:"status" binding:"omitempty,oneof=new assigned in_progress resolved closed"`
+		Q      string `form:"q" binding:"omitempty,max=128"`
+	}
+	if err := c.ShouldBindQuery(&query); err != nil {
+		badRequest(c, "INVALID_QUERY", "invalid cases query")
+		return
+	}
+	statusFilter := strings.TrimSpace(query.Status)
+	q := strings.TrimSpace(strings.ToLower(query.Q))
 
 	where, args := middleware.BuildScopeWhere(user, "cl")
 	if statusFilter != "" {
@@ -179,7 +187,7 @@ func (a *API) ListCases(c *gin.Context) {
 }
 
 type assignCaseRequest struct {
-	AssignedTo int64 `json:"assigned_to"`
+	AssignedTo int64 `json:"assigned_to" binding:"required,gte=1"`
 }
 
 func (a *API) AssignCase(c *gin.Context) {
@@ -228,7 +236,7 @@ func (a *API) AssignCase(c *gin.Context) {
 }
 
 type caseStatusRequest struct {
-	Status string `json:"status"`
+	Status string `json:"status" binding:"required,oneof=assigned in_progress resolved closed"`
 }
 
 var allowedTransitions = map[string]map[string]struct{}{

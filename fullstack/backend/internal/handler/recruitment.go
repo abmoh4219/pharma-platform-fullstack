@@ -22,8 +22,8 @@ import (
 )
 
 type createPositionRequest struct {
-	Title       string `json:"title"`
-	Description string `json:"description"`
+	Title       string `json:"title" binding:"required,min=1,max=128"`
+	Description string `json:"description" binding:"max=2000"`
 }
 
 func (a *API) CreatePosition(c *gin.Context) {
@@ -103,13 +103,20 @@ func (a *API) ListPositions(c *gin.Context) {
 }
 
 type candidateUpsertRequest struct {
-	FullName   string `json:"full_name"`
-	Phone      string `json:"phone"`
-	IDNumber   string `json:"id_number"`
-	Email      string `json:"email"`
-	PositionID *int64 `json:"position_id"`
-	Status     string `json:"status"`
-	ResumePath string `json:"resume_path"`
+	FullName   string `json:"full_name" binding:"required,min=1,max=128"`
+	Phone      string `json:"phone" binding:"required,min=5,max=32"`
+	IDNumber   string `json:"id_number" binding:"required,min=3,max=64"`
+	Email      string `json:"email" binding:"omitempty,email,max=128"`
+	PositionID *int64 `json:"position_id" binding:"omitempty,gte=1"`
+	Status     string `json:"status" binding:"omitempty,oneof=new imported shortlisted rejected"`
+	ResumePath string `json:"resume_path" binding:"max=255"`
+}
+
+var allowedCandidateStatus = map[string]struct{}{
+	"new":         {},
+	"imported":    {},
+	"shortlisted": {},
+	"rejected":    {},
 }
 
 func (a *API) CreateCandidate(c *gin.Context) {
@@ -153,6 +160,10 @@ func (a *API) upsertCandidate(c *gin.Context, candidateID int64) {
 	status := strings.TrimSpace(req.Status)
 	if status == "" {
 		status = "new"
+	}
+	if _, ok := allowedCandidateStatus[status]; !ok {
+		badRequest(c, "INVALID_STATUS", "status must be one of: new, imported, shortlisted, rejected")
+		return
 	}
 
 	if candidateID == 0 {
@@ -283,8 +294,8 @@ func (a *API) scanCandidateRow(scanner interface{ Scan(dest ...any) error }) (gi
 }
 
 type candidateMergeRequest struct {
-	PrimaryCandidateID int64   `json:"primary_candidate_id"`
-	DuplicateIDs       []int64 `json:"duplicate_ids"`
+	PrimaryCandidateID int64   `json:"primary_candidate_id" binding:"required,gte=1"`
+	DuplicateIDs       []int64 `json:"duplicate_ids" binding:"required,min=1,dive,gte=1"`
 }
 
 func (a *API) MergeCandidates(c *gin.Context) {
@@ -393,7 +404,15 @@ type smartSearchResult struct {
 }
 
 func (a *API) SmartSearchCandidates(c *gin.Context) {
-	query := strings.TrimSpace(strings.ToLower(c.Query("q")))
+	var req struct {
+		Query string `form:"q" binding:"required,min=1,max=128"`
+	}
+	if err := c.ShouldBindQuery(&req); err != nil {
+		badRequest(c, "QUERY_REQUIRED", "q is required")
+		return
+	}
+
+	query := strings.TrimSpace(strings.ToLower(req.Query))
 	if query == "" {
 		badRequest(c, "QUERY_REQUIRED", "q is required")
 		return
@@ -515,7 +534,7 @@ func (a *API) ImportCandidates(c *gin.Context) {
 
 	rows, err := parseCandidateImportRows(file, fileHeader)
 	if err != nil {
-		badRequest(c, "IMPORT_PARSE_ERROR", err.Error())
+		badRequest(c, "IMPORT_PARSE_ERROR", "failed to parse import file")
 		return
 	}
 
@@ -566,7 +585,7 @@ func (a *API) insertImportedCandidate(user middleware.AuthUser, fullName, phone,
 		VALUES (?, ?, ?, ?, ?, ?, ?, 'imported', ?)
 	`, fullName, phoneEnc, idEnc, strPtr(email), user.Institution, user.Department, user.Team, user.ID)
 	if err != nil {
-		return err
+		return fmt.Errorf("unable to save candidate row")
 	}
 	return nil
 }

@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"database/sql"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -38,46 +39,40 @@ func NewAuthMiddleware(db *sql.DB, cfg config.Config) *AuthMiddleware {
 func (m *AuthMiddleware) RequireAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-				"success": false,
-				"error":   gin.H{"code": "UNAUTHORIZED", "message": "missing bearer token"},
-			})
+		parts := strings.Fields(authHeader)
+		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+			AbortWithError(c, http.StatusUnauthorized, "UNAUTHORIZED", "missing bearer token")
+			return
+		}
+		token := strings.TrimSpace(parts[1])
+		if token == "" {
+			AbortWithError(c, http.StatusUnauthorized, "UNAUTHORIZED", "missing bearer token")
 			return
 		}
 
-		token := strings.TrimPrefix(authHeader, "Bearer ")
 		claims, err := security.ParseToken(m.cfg.JWTSecret, token)
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-				"success": false,
-				"error":   gin.H{"code": "INVALID_TOKEN", "message": "invalid or expired token"},
-			})
+			if errors.Is(err, security.ErrExpiredToken) {
+				AbortWithError(c, http.StatusUnauthorized, "TOKEN_EXPIRED", "token has expired")
+				return
+			}
+			AbortWithError(c, http.StatusUnauthorized, "INVALID_TOKEN", "invalid token")
 			return
 		}
 
 		var blacklisted int
-		if err := m.db.QueryRow(`SELECT COUNT(1) FROM token_blacklist WHERE jti = ?`, claims.ID).Scan(&blacklisted); err != nil {
-			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
-				"success": false,
-				"error":   gin.H{"code": "DB_ERROR", "message": "failed to validate token"},
-			})
+		if err := m.db.QueryRow(`SELECT COUNT(1) FROM token_blacklist WHERE jti = ? AND expires_at >= UTC_TIMESTAMP()`, claims.ID).Scan(&blacklisted); err != nil {
+			AbortWithError(c, http.StatusInternalServerError, "DB_ERROR", "failed to validate token")
 			return
 		}
 		if blacklisted > 0 {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-				"success": false,
-				"error":   gin.H{"code": "TOKEN_REVOKED", "message": "token has been revoked"},
-			})
+			AbortWithError(c, http.StatusUnauthorized, "TOKEN_REVOKED", "token has been revoked")
 			return
 		}
 
 		uid, err := strconv.ParseInt(claims.Subject, 10, 64)
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-				"success": false,
-				"error":   gin.H{"code": "INVALID_TOKEN_SUBJECT", "message": "invalid token subject"},
-			})
+			AbortWithError(c, http.StatusUnauthorized, "INVALID_TOKEN_SUBJECT", "invalid token subject")
 			return
 		}
 
@@ -100,16 +95,10 @@ func (m *AuthMiddleware) RequireAuth() gin.HandlerFunc {
 			&user.Team,
 		); err != nil {
 			if err == sql.ErrNoRows {
-				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-					"success": false,
-					"error":   gin.H{"code": "USER_NOT_FOUND", "message": "user is inactive or missing"},
-				})
+				AbortWithError(c, http.StatusUnauthorized, "USER_NOT_FOUND", "user is inactive or missing")
 				return
 			}
-			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
-				"success": false,
-				"error":   gin.H{"code": "DB_ERROR", "message": "failed to load user context"},
-			})
+			AbortWithError(c, http.StatusInternalServerError, "DB_ERROR", "failed to load user context")
 			return
 		}
 
@@ -123,18 +112,12 @@ func DataScopeRequired() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user, ok := GetAuthUser(c)
 		if !ok {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-				"success": false,
-				"error":   gin.H{"code": "UNAUTHORIZED", "message": "missing auth user context"},
-			})
+			AbortWithError(c, http.StatusUnauthorized, "UNAUTHORIZED", "missing auth user context")
 			return
 		}
 
 		if user.Role != "system_admin" && (user.Institution == "" || user.Department == "" || user.Team == "") {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
-				"success": false,
-				"error":   gin.H{"code": "INVALID_SCOPE", "message": "user data scope is incomplete"},
-			})
+			AbortWithError(c, http.StatusForbidden, "INVALID_SCOPE", "user data scope is incomplete")
 			return
 		}
 
@@ -151,17 +134,11 @@ func RequireRoles(allowed ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user, ok := GetAuthUser(c)
 		if !ok {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-				"success": false,
-				"error":   gin.H{"code": "UNAUTHORIZED", "message": "missing auth user context"},
-			})
+			AbortWithError(c, http.StatusUnauthorized, "UNAUTHORIZED", "missing auth user context")
 			return
 		}
 		if _, ok := set[user.Role]; !ok {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
-				"success": false,
-				"error":   gin.H{"code": "FORBIDDEN", "message": "insufficient role permission"},
-			})
+			AbortWithError(c, http.StatusForbidden, "FORBIDDEN", "insufficient role permission")
 			return
 		}
 		c.Next()

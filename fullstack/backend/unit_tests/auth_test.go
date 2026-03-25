@@ -1,6 +1,7 @@
 package unit_tests
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -63,5 +64,33 @@ func TestParseTokenRejectsWrongSecret(t *testing.T) {
 
 	if _, err := security.ParseToken("wrong", token); err == nil {
 		t.Fatalf("expected parse failure with wrong secret")
+	}
+}
+
+func TestParseTokenExpired(t *testing.T) {
+	token, _, _, err := security.IssueToken("secret", security.TokenInput{
+		UserID:      1,
+		Username:    "admin",
+		Role:        "system_admin",
+		ScopeID:     1,
+		Institution: "EAGLE_HOSPITAL",
+		Department:  "HQ",
+		Team:        "CORE",
+		ExpiryHours: -1,
+	})
+	if err != nil {
+		t.Fatalf("issue token: %v", err)
+	}
+
+	_, err = security.ParseToken("secret", token)
+	if !errors.Is(err, security.ErrExpiredToken) {
+		t.Fatalf("expected ErrExpiredToken, got %v", err)
+	}
+}
+
+func TestParseTokenMalformed(t *testing.T) {
+	_, err := security.ParseToken("secret", "not-a-jwt")
+	if !errors.Is(err, security.ErrInvalidToken) {
+		t.Fatalf("expected ErrInvalidToken, got %v", err)
 	}
 }

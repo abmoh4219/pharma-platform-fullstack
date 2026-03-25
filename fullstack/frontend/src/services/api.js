@@ -49,8 +49,13 @@ async function request(path, options = {}) {
   }
 
   if (!res.ok || !payload?.success) {
-    const message = payload?.error?.message || `Request failed (${res.status})`
-    throw new Error(message)
+    const message =
+      (typeof payload?.error === 'string' ? payload.error : payload?.error?.message) ||
+      `Request failed (${res.status})`
+    const code = payload?.code || payload?.error?.code || 'REQUEST_FAILED'
+    const err = new Error(message)
+    err.code = code
+    throw err
   }
 
   return payload.data
