@@ -1,0 +1,3 @@
+-- Initial schema placeholder.
+-- Authentication, role permissions, and data-scope tables
+-- will be added feature by feature.

@@ -1,0 +1,94 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: pharma_mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: pharma_platform
+      MYSQL_USER: pharma_user
+      MYSQL_PASSWORD: pharma_pass
+    command:
+      - --default-authentication-plugin=mysql_native_password
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./backend/migrations/init.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-prootpassword"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  go-backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: pharma_backend
+    restart: unless-stopped
+    environment:
+      APP_ENV: development
+      APP_PORT: 8080
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_NAME: pharma_platform
+      DB_USER: pharma_user
+      DB_PASSWORD: pharma_pass
+      JWT_SECRET: change_me_for_dev_only
+      JWT_EXP_HOURS: 8
+      APP_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef
+      UPLOAD_DIR: /app/storage/uploads
+      UPLOAD_TMP_DIR: /app/storage/tmp
+      MAX_UPLOAD_MB: 20
+      RUN_BACKEND_TESTS_ON_STARTUP: 1
+    depends_on:
+      mysql:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    volumes:
+      - backend_uploads:/app/storage
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/api/v1/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  vue-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: pharma_frontend
+    restart: unless-stopped
+    environment:
+      VITE_APP_NAME: Pharma Compliance and Talent Operations Platform
+      VITE_API_BASE_URL: http://localhost:8080/api/v1
+    depends_on:
+      - go-backend
+    ports:
+      - "5173:5173"
+
+  test-runner:
+    build:
+      context: .
+      dockerfile: tests/Dockerfile
+    container_name: pharma_test_runner
+    restart: "no"
+    environment:
+      BACKEND_URL: http://go-backend:8080
+    depends_on:
+      mysql:
+        condition: service_healthy
+      go-backend:
+        condition: service_healthy
+      vue-frontend:
+        condition: service_started
+
+volumes:
+  mysql_data:
+  backend_uploads:

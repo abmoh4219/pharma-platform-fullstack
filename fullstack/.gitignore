@@ -1,0 +1,16 @@
+# OS
+.DS_Store
+
+# Env files
+.env
+
+# Frontend
+frontend/node_modules
+frontend/dist
+
+# Backend
+backend/bin
+backend/tmp
+
+# Logs
+*.log

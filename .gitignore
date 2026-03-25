@@ -1,0 +1,25 @@
+# Node
+node_modules/
+dist/
+.vite/
+
+# Go
+bin/
+vendor/
+
+# Env files
+.env
+.env.local
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+
+# Docker
+mysql_data/
+
+# Misc
+coverage/
+tmp/
