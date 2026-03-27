@@ -25,6 +25,11 @@ type Config struct {
 	CORSOrigins   []string
 }
 
+const (
+	legacyJWTSecret     = "change_me_for_dev_only"
+	legacyEncryptionKey = "0123456789abcdef0123456789abcdef"
+)
+
 func Load() (Config, error) {
 	cfg := Config{
 		AppEnv:        getEnv("APP_ENV", "development"),
@@ -33,10 +38,10 @@ func Load() (Config, error) {
 		DBPort:        getEnvInt("DB_PORT", 3306),
 		DBName:        getEnv("DB_NAME", "pharma_platform"),
 		DBUser:        getEnv("DB_USER", "pharma_user"),
-		DBPassword:    getEnv("DB_PASSWORD", "pharma_pass"),
-		JWTSecret:     getEnv("JWT_SECRET", "change_me_for_dev_only"),
+		DBPassword:    getEnv("DB_PASSWORD", ""),
+		JWTSecret:     getEnv("JWT_SECRET", ""),
 		JWTExpHours:   getEnvInt("JWT_EXP_HOURS", 8),
-		EncryptionKey: getEnv("APP_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef"),
+		EncryptionKey: getEnv("APP_ENCRYPTION_KEY", ""),
 		UploadDir:     getEnv("UPLOAD_DIR", "storage/uploads"),
 		UploadTmpDir:  getEnv("UPLOAD_TMP_DIR", "storage/tmp"),
 		MaxUploadMB:   getEnvInt64("MAX_UPLOAD_MB", 20),
@@ -54,6 +59,32 @@ func Load() (Config, error) {
 	}
 	if cfg.RateLimitRPM <= 0 {
 		return Config{}, fmt.Errorf("RATE_LIMIT_RPM must be greater than 0")
+	}
+
+	if strings.TrimSpace(cfg.DBPassword) == "" {
+		return Config{}, fmt.Errorf("DB_PASSWORD is required")
+	}
+
+	jwtSecret := strings.TrimSpace(cfg.JWTSecret)
+	if jwtSecret == "" {
+		return Config{}, fmt.Errorf("JWT_SECRET is required")
+	}
+	if len(jwtSecret) < 24 {
+		return Config{}, fmt.Errorf("JWT_SECRET must be at least 24 characters")
+	}
+	if jwtSecret == legacyJWTSecret {
+		return Config{}, fmt.Errorf("JWT_SECRET cannot use insecure legacy default")
+	}
+
+	encryptionKey := strings.TrimSpace(cfg.EncryptionKey)
+	if encryptionKey == "" {
+		return Config{}, fmt.Errorf("APP_ENCRYPTION_KEY is required")
+	}
+	if len(encryptionKey) < 16 {
+		return Config{}, fmt.Errorf("APP_ENCRYPTION_KEY must be at least 16 characters")
+	}
+	if encryptionKey == legacyEncryptionKey {
+		return Config{}, fmt.Errorf("APP_ENCRYPTION_KEY cannot use insecure legacy default")
 	}
 
 	return cfg, nil

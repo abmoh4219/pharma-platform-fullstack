@@ -7,6 +7,10 @@ FRONTEND_DIR="$ROOT_DIR/frontend"
 API_TEST_DIR="$ROOT_DIR/API_tests"
 BASE_URL="${BACKEND_URL:-http://localhost:8080}"
 
+if [[ -x /usr/local/go/bin/go ]] && ! command -v go >/dev/null 2>&1; then
+  export PATH="/usr/local/go/bin:${PATH}"
+fi
+
 PASS_COUNT=0
 FAIL_COUNT=0
 
@@ -28,6 +32,23 @@ run_step() {
   fi
 }
 
+run_backend_tests() {
+  if ! command -v go >/dev/null 2>&1; then
+    echo "Go toolchain is not available in this environment"
+    return 1
+  fi
+  bash -c "cd '$BACKEND_DIR' && go test ./..."
+}
+
+ensure_frontend_deps() {
+  if [[ -d "$FRONTEND_DIR/node_modules" ]]; then
+    echo "Frontend dependencies already available; skipping npm ci"
+    return 0
+  fi
+
+  bash -c "cd '$FRONTEND_DIR' && npm ci --no-audit --no-fund"
+}
+
 wait_for_backend() {
   local health_url="${BASE_URL}/api/v1/health"
   local retries=60
@@ -45,8 +66,8 @@ wait_for_backend() {
   return 1
 }
 
-run_step "Backend Go unit tests" bash -c "cd '$BACKEND_DIR' && go test ./..."
-run_step "Frontend dependency install" bash -c "cd '$FRONTEND_DIR' && npm ci --no-audit --no-fund"
+run_step "Backend Go unit tests" run_backend_tests
+run_step "Frontend dependency install" ensure_frontend_deps
 run_step "Frontend Vitest unit tests" bash -c "cd '$FRONTEND_DIR' && npm run test"
 run_step "Wait for backend API" wait_for_backend
 run_step "API login test" bash "$API_TEST_DIR/login_test.sh"

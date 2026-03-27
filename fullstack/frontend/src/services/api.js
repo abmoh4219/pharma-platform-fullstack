@@ -1,6 +1,6 @@
-import { clearSession, authState } from '../store/auth'
+import { clearSession, authState } from "../store/auth"
 
-const API_BASE = '/api/v1'
+const API_BASE = "/api/v1"
 
 async function request(path, options = {}) {
   const headers = { ...(options.headers || {}) }
@@ -10,7 +10,7 @@ async function request(path, options = {}) {
   }
 
   const config = {
-    method: options.method || 'GET',
+    method: options.method || "GET",
     headers,
   }
 
@@ -18,7 +18,7 @@ async function request(path, options = {}) {
     if (options.isFormData) {
       config.body = options.body
     } else {
-      headers['Content-Type'] = 'application/json'
+      headers["Content-Type"] = "application/json"
       config.body = JSON.stringify(options.body)
     }
   }
@@ -27,16 +27,15 @@ async function request(path, options = {}) {
 
   if (res.status === 401) {
     clearSession()
-    if (window.location.pathname !== '/login') {
-      window.location.href = '/login'
+    if (window.location.pathname !== "/login") {
+      window.location.href = "/login"
     }
-    throw new Error('Session expired. Please login again.')
+    throw new Error("Session expired. Please login again.")
   }
 
-  const isCSV = options.expectCSV
-  if (isCSV) {
+  if (options.expectCSV) {
     if (!res.ok) {
-      throw new Error('Failed to export CSV')
+      throw new Error("Failed to export CSV")
     }
     return await res.blob()
   }
@@ -50,9 +49,9 @@ async function request(path, options = {}) {
 
   if (!res.ok || !payload?.success) {
     const message =
-      (typeof payload?.error === 'string' ? payload.error : payload?.error?.message) ||
+      (typeof payload?.error === "string" ? payload.error : payload?.error?.message) ||
       `Request failed (${res.status})`
-    const code = payload?.code || payload?.error?.code || 'REQUEST_FAILED'
+    const code = payload?.code || payload?.error?.code || "REQUEST_FAILED"
     const err = new Error(message)
     err.code = code
     throw err
@@ -63,109 +62,118 @@ async function request(path, options = {}) {
 
 export const api = {
   login(body) {
-    return request('/auth/login', { method: 'POST', body })
+    return request("/auth/login", { method: "POST", body })
   },
   logout() {
-    return request('/auth/logout', { method: 'POST' })
+    return request("/auth/logout", { method: "POST" })
   },
   me() {
-    return request('/auth/me')
+    return request("/auth/me")
   },
   dashboard() {
-    return request('/dashboard/summary')
+    return request("/dashboard/summary")
   },
 
   listPositions() {
-    return request('/recruitment/positions')
+    return request("/recruitment/positions")
   },
   createPosition(body) {
-    return request('/recruitment/positions', { method: 'POST', body })
+    return request("/recruitment/positions", { method: "POST", body })
   },
   listCandidates() {
-    return request('/recruitment/candidates')
+    return request("/recruitment/candidates")
   },
   createCandidate(body) {
-    return request('/recruitment/candidates', { method: 'POST', body })
+    return request("/recruitment/candidates", { method: "POST", body })
   },
   updateCandidate(id, body) {
-    return request(`/recruitment/candidates/${id}`, { method: 'PUT', body })
+    return request(`/recruitment/candidates/${id}`, { method: "PUT", body })
   },
   importCandidates(file) {
     const form = new FormData()
-    form.append('file', file)
-    return request('/recruitment/candidates/import', {
-      method: 'POST',
+    form.append("file", file)
+    return request("/recruitment/candidates/import", {
+      method: "POST",
       body: form,
       isFormData: true,
     })
   },
   mergeCandidates(body) {
-    return request('/recruitment/candidates/merge', { method: 'POST', body })
+    return request("/recruitment/candidates/merge", { method: "POST", body })
   },
   searchCandidates(query) {
     return request(`/recruitment/candidates/search?q=${encodeURIComponent(query)}`)
   },
+  candidateMatchScore(candidateId, positionId) {
+    return request(`/recruitment/candidates/${candidateId}/match-score?position_id=${encodeURIComponent(positionId)}`)
+  },
+  candidateRecommendations(candidateId, limit = 5) {
+    return request(`/recruitment/candidates/${candidateId}/recommendations?limit=${encodeURIComponent(limit)}`)
+  },
 
   listQualifications() {
-    return request('/compliance/qualifications')
+    return request("/compliance/qualifications")
   },
   createQualification(body) {
-    return request('/compliance/qualifications', { method: 'POST', body })
+    return request("/compliance/qualifications", { method: "POST", body })
   },
   updateQualification(id, body) {
-    return request(`/compliance/qualifications/${id}`, { method: 'PUT', body })
+    return request(`/compliance/qualifications/${id}`, { method: "PUT", body })
   },
   deleteQualification(id) {
-    return request(`/compliance/qualifications/${id}`, { method: 'DELETE' })
+    return request(`/compliance/qualifications/${id}`, { method: "DELETE" })
   },
   listRestrictions() {
-    return request('/compliance/restrictions')
+    return request("/compliance/restrictions")
   },
   createRestriction(body) {
-    return request('/compliance/restrictions', { method: 'POST', body })
+    return request("/compliance/restrictions", { method: "POST", body })
   },
   updateRestriction(id, body) {
-    return request(`/compliance/restrictions/${id}`, { method: 'PUT', body })
+    return request(`/compliance/restrictions/${id}`, { method: "PUT", body })
   },
   deleteRestriction(id) {
-    return request(`/compliance/restrictions/${id}`, { method: 'DELETE' })
+    return request(`/compliance/restrictions/${id}`, { method: "DELETE" })
   },
   checkRestriction(body) {
-    return request('/compliance/restrictions/check', { method: 'POST', body })
+    return request("/compliance/restrictions/check", { method: "POST", body })
   },
 
   listCases(params = {}) {
     const usp = new URLSearchParams()
-    if (params.status) usp.set('status', params.status)
-    if (params.q) usp.set('q', params.q)
-    const query = usp.toString() ? `?${usp.toString()}` : ''
+    if (params.status) usp.set("status", params.status)
+    if (params.q) usp.set("q", params.q)
+    const query = usp.toString() ? `?${usp.toString()}` : ""
     return request(`/cases${query}`)
   },
   createCase(body) {
-    return request('/cases', { method: 'POST', body })
+    return request("/cases", { method: "POST", body })
   },
   assignCase(id, assignedTo) {
-    return request(`/cases/${id}/assign`, { method: 'PUT', body: { assigned_to: assignedTo } })
+    return request(`/cases/${id}/assign`, { method: "PUT", body: { assigned_to: assignedTo } })
   },
   updateCaseStatus(id, status) {
-    return request(`/cases/${id}/status`, { method: 'PUT', body: { status } })
+    return request(`/cases/${id}/status`, { method: "PUT", body: { status } })
   },
   listCaseAttachments(caseId) {
     return request(`/cases/${caseId}/attachments`)
   },
+  listCaseHistory(caseId) {
+    return request(`/cases/${caseId}/history`)
+  },
 
   uploadInit(body) {
-    return request('/files/initiate', { method: 'POST', body })
+    return request("/files/initiate", { method: "POST", body })
   },
-  uploadChunk(uploadId, chunkIndex, blob, name = 'chunk.bin') {
+  uploadChunk(uploadId, chunkIndex, blob, name = "chunk.bin") {
     const form = new FormData()
-    form.append('upload_id', uploadId)
-    form.append('chunk_index', String(chunkIndex))
-    form.append('chunk', blob, name)
-    return request('/files/chunk', { method: 'POST', body: form, isFormData: true })
+    form.append("upload_id", uploadId)
+    form.append("chunk_index", String(chunkIndex))
+    form.append("chunk", blob, name)
+    return request("/files/chunk", { method: "POST", body: form, isFormData: true })
   },
   uploadComplete(uploadId) {
-    return request('/files/complete', { method: 'POST', body: { upload_id: uploadId } })
+    return request("/files/complete", { method: "POST", body: { upload_id: uploadId } })
   },
   uploadSession(uploadId) {
     return request(`/files/sessions/${uploadId}`)
@@ -177,21 +185,21 @@ export const api = {
   listAuditLogs(params = {}) {
     const usp = new URLSearchParams()
     Object.entries(params).forEach(([key, value]) => {
-      if (value !== undefined && value !== null && value !== '') {
+      if (value !== undefined && value !== null && value !== "") {
         usp.set(key, value)
       }
     })
-    const query = usp.toString() ? `?${usp.toString()}` : ''
+    const query = usp.toString() ? `?${usp.toString()}` : ""
     return request(`/audit/logs${query}`)
   },
   exportAuditCSV(params = {}) {
     const usp = new URLSearchParams()
     Object.entries(params).forEach(([key, value]) => {
-      if (value !== undefined && value !== null && value !== '') {
+      if (value !== undefined && value !== null && value !== "") {
         usp.set(key, value)
       }
     })
-    const query = usp.toString() ? `?${usp.toString()}` : ''
+    const query = usp.toString() ? `?${usp.toString()}` : ""
     return request(`/audit/logs/export${query}`, { expectCSV: true })
   },
 }

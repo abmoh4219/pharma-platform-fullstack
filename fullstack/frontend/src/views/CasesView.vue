@@ -1,55 +1,57 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
-import { Archive, FilePlus2, Paperclip, RefreshCcw } from 'lucide-vue-next'
-import { toast } from 'vue-sonner'
+import { computed, onMounted, reactive, ref } from "vue"
+import { Archive, FilePlus2, Paperclip, RefreshCcw } from "lucide-vue-next"
+import { toast } from "vue-sonner"
 
-import Badge from '@/components/ui/badge/Badge.vue'
-import Button from '@/components/ui/button/Button.vue'
-import Card from '@/components/ui/card/Card.vue'
-import CardContent from '@/components/ui/card/CardContent.vue'
-import CardHeader from '@/components/ui/card/CardHeader.vue'
-import CardTitle from '@/components/ui/card/CardTitle.vue'
-import Input from '@/components/ui/input/Input.vue'
-import Spinner from '@/components/ui/spinner/Spinner.vue'
-import Textarea from '@/components/ui/textarea/Textarea.vue'
+import Badge from "@/components/ui/badge/Badge.vue"
+import Button from "@/components/ui/button/Button.vue"
+import Card from "@/components/ui/card/Card.vue"
+import CardContent from "@/components/ui/card/CardContent.vue"
+import CardHeader from "@/components/ui/card/CardHeader.vue"
+import CardTitle from "@/components/ui/card/CardTitle.vue"
+import Input from "@/components/ui/input/Input.vue"
+import Spinner from "@/components/ui/spinner/Spinner.vue"
+import Textarea from "@/components/ui/textarea/Textarea.vue"
 
-import { api } from '../services/api'
+import { api } from "../services/api"
 
 const loading = ref(false)
 const uploadLoading = ref(false)
 const uploadProgress = ref(0)
+const historyLoading = ref(false)
 
 const cases = ref([])
 const attachments = ref([])
-const selectedCaseId = ref('')
+const caseHistory = ref([])
+const selectedCaseId = ref("")
 const selectedFile = ref(null)
 
 const filters = reactive({
-  status: '',
-  q: '',
+  status: "",
+  q: "",
 })
 
 const caseForm = reactive({
-  subject: '',
-  description: '',
+  subject: "",
+  description: "",
 })
 
 const assignForm = reactive({
-  caseId: '',
-  assignedTo: '',
+  caseId: "",
+  assignedTo: "",
 })
 
 const statusForm = reactive({
-  caseId: '',
-  status: 'assigned',
+  caseId: "",
+  status: "assigned",
 })
 
 const statusColumns = [
-  { key: 'new', label: 'New', variant: 'outline' },
-  { key: 'assigned', label: 'Assigned', variant: 'warning' },
-  { key: 'in_progress', label: 'In Progress', variant: 'default' },
-  { key: 'resolved', label: 'Resolved', variant: 'success' },
-  { key: 'closed', label: 'Closed', variant: 'secondary' },
+  { key: "new", label: "New", variant: "outline" },
+  { key: "assigned", label: "Assigned", variant: "warning" },
+  { key: "in_progress", label: "In Progress", variant: "default" },
+  { key: "resolved", label: "Resolved", variant: "success" },
+  { key: "closed", label: "Closed", variant: "secondary" },
 ]
 
 const groupedCases = computed(() =>
@@ -61,7 +63,7 @@ const groupedCases = computed(() =>
 
 function statusVariant(status) {
   const found = statusColumns.find((item) => item.key === status)
-  return found?.variant || 'outline'
+  return found?.variant || "outline"
 }
 
 async function loadCases() {
@@ -69,10 +71,10 @@ async function loadCases() {
   try {
     cases.value = await api.listCases(filters)
     if (selectedCaseId.value) {
-      await loadAttachments()
+      await Promise.all([loadAttachments(), loadHistory()])
     }
   } catch (err) {
-    toast.error(err.message || 'Failed to load cases')
+    toast.error(err.message || "Failed to load cases")
   } finally {
     loading.value = false
   }
@@ -80,48 +82,48 @@ async function loadCases() {
 
 async function createCase() {
   if (!caseForm.subject.trim() || !caseForm.description.trim()) {
-    toast.warning('Subject and description are required')
+    toast.warning("Subject and description are required")
     return
   }
 
   try {
     await api.createCase({ ...caseForm })
-    toast.success('Case created')
-    caseForm.subject = ''
-    caseForm.description = ''
+    toast.success("Case created")
+    caseForm.subject = ""
+    caseForm.description = ""
     await loadCases()
   } catch (err) {
-    toast.error(err.message || 'Failed to create case')
+    toast.error(err.message || "Failed to create case")
   }
 }
 
 async function assignCase() {
   if (!assignForm.caseId || !assignForm.assignedTo) {
-    toast.warning('Case ID and assignee user ID are required')
+    toast.warning("Case ID and assignee user ID are required")
     return
   }
 
   try {
     await api.assignCase(Number(assignForm.caseId), Number(assignForm.assignedTo))
-    toast.success('Case assigned')
+    toast.success("Case assigned")
     await loadCases()
   } catch (err) {
-    toast.error(err.message || 'Failed to assign case')
+    toast.error(err.message || "Failed to assign case")
   }
 }
 
 async function updateStatus() {
   if (!statusForm.caseId || !statusForm.status) {
-    toast.warning('Case ID and status are required')
+    toast.warning("Case ID and status are required")
     return
   }
 
   try {
     await api.updateCaseStatus(Number(statusForm.caseId), statusForm.status)
-    toast.success('Case status updated')
+    toast.success("Case status updated")
     await loadCases()
   } catch (err) {
-    toast.error(err.message || 'Failed to update case status')
+    toast.error(err.message || "Failed to update case status")
   }
 }
 
@@ -131,14 +133,29 @@ async function loadAttachments() {
     attachments.value = await api.listCaseAttachments(Number(selectedCaseId.value))
   } catch (err) {
     attachments.value = []
-    toast.error(err.message || 'Failed to load attachments')
+    toast.error(err.message || "Failed to load attachments")
+  }
+}
+
+async function loadHistory() {
+  if (!selectedCaseId.value) return
+  historyLoading.value = true
+  try {
+    caseHistory.value = await api.listCaseHistory(Number(selectedCaseId.value))
+  } catch (err) {
+    caseHistory.value = []
+    toast.error(err.message || "Failed to load case history")
+  } finally {
+    historyLoading.value = false
   }
 }
 
 function chooseCase(record) {
   selectedCaseId.value = String(record.id)
+  assignForm.caseId = String(record.id)
   statusForm.caseId = String(record.id)
   loadAttachments()
+  loadHistory()
 }
 
 function onFilePicked(event) {
@@ -147,7 +164,7 @@ function onFilePicked(event) {
 
 async function uploadCaseAttachment() {
   if (!selectedCaseId.value || !selectedFile.value) {
-    toast.warning('Select case and file first')
+    toast.warning("Select case and file first")
     return
   }
 
@@ -160,10 +177,10 @@ async function uploadCaseAttachment() {
     const totalChunks = Math.ceil(file.size / chunkSize)
 
     const init = await api.uploadInit({
-      module_name: 'case_ledgers',
+      module_name: "case_ledgers",
       record_id: Number(selectedCaseId.value),
       original_name: file.name,
-      mime_type: file.type || 'application/octet-stream',
+      mime_type: file.type || "application/octet-stream",
       total_chunks: totalChunks,
       file_size: file.size,
     })
@@ -177,12 +194,12 @@ async function uploadCaseAttachment() {
     }
 
     await api.uploadComplete(init.upload_id)
-    toast.success('Attachment uploaded successfully')
+    toast.success("Attachment uploaded successfully")
     selectedFile.value = null
     uploadProgress.value = 100
-    await loadAttachments()
+    await Promise.all([loadAttachments(), loadHistory()])
   } catch (err) {
-    toast.error(err.message || 'Attachment upload failed')
+    toast.error(err.message || "Attachment upload failed")
   } finally {
     uploadLoading.value = false
   }
@@ -196,7 +213,7 @@ onMounted(loadCases)
     <div class="flex flex-wrap items-center justify-between gap-2">
       <div>
         <h2 class="section-title">Case Ledger</h2>
-        <p class="section-subtitle">Create, assign, transition, and attach evidence to operational cases</p>
+        <p class="section-subtitle">Create, assign, transition, and track full case processing history</p>
       </div>
       <Badge variant="outline">{{ cases.length }} case(s)</Badge>
     </div>
@@ -338,9 +355,9 @@ onMounted(loadCases)
                 <td class="px-4 py-3">
                   <Badge :variant="statusVariant(item.status)">{{ item.status }}</Badge>
                 </td>
-                <td class="px-4 py-3">{{ item.assigned_to_name || '-' }}</td>
+                <td class="px-4 py-3">{{ item.assigned_to_name || "-" }}</td>
                 <td class="px-4 py-3 text-right">
-                  <Button size="sm" variant="ghost" @click="chooseCase(item)">Attachments</Button>
+                  <Button size="sm" variant="ghost" @click="chooseCase(item)">Open</Button>
                 </td>
               </tr>
               <tr v-if="!cases.length">
@@ -351,52 +368,87 @@ onMounted(loadCases)
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader class="pb-2">
-          <CardTitle>Attachments</CardTitle>
-        </CardHeader>
-        <CardContent class="space-y-3">
-          <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <Input v-model="selectedCaseId" placeholder="Selected case ID" />
-            <input type="file" class="block w-full text-sm text-muted-foreground file:mr-3 file:rounded-md file:border-0 file:bg-primary file:px-3 file:py-2 file:text-primary-foreground" @change="onFilePicked" />
-          </div>
+      <div class="panel-grid-2">
+        <Card>
+          <CardHeader class="pb-2">
+            <CardTitle>Attachments</CardTitle>
+          </CardHeader>
+          <CardContent class="space-y-3">
+            <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <Input v-model="selectedCaseId" placeholder="Selected case ID" />
+              <input
+                type="file"
+                class="block w-full text-sm text-muted-foreground file:mr-3 file:rounded-md file:border-0 file:bg-primary file:px-3 file:py-2 file:text-primary-foreground"
+                @change="onFilePicked"
+              />
+            </div>
 
-          <Button :loading="uploadLoading" @click="uploadCaseAttachment">
-            <Paperclip class="h-4 w-4" />
-            Upload Attachment
-          </Button>
+            <Button :loading="uploadLoading" @click="uploadCaseAttachment">
+              <Paperclip class="h-4 w-4" />
+              Upload Attachment
+            </Button>
 
-          <div class="h-2 w-full overflow-hidden rounded-full bg-muted">
-            <div class="h-full bg-secondary transition-all" :style="{ width: `${uploadProgress}%` }" />
-          </div>
+            <div class="h-2 w-full overflow-hidden rounded-full bg-muted">
+              <div class="h-full bg-secondary transition-all" :style="{ width: `${uploadProgress}%` }" />
+            </div>
 
-          <div class="overflow-x-auto rounded-lg border border-border">
-            <table class="min-w-full divide-y divide-border text-sm">
-              <thead class="bg-muted/60 text-left text-xs uppercase tracking-wide text-muted-foreground">
-                <tr>
-                  <th class="px-4 py-3">ID</th>
-                  <th class="px-4 py-3">Name</th>
-                  <th class="px-4 py-3">MIME</th>
-                  <th class="px-4 py-3">Size</th>
-                  <th class="px-4 py-3">SHA256</th>
-                </tr>
-              </thead>
-              <tbody class="divide-y divide-border">
-                <tr v-for="file in attachments" :key="file.id" class="hover:bg-accent/40">
-                  <td class="px-4 py-3">{{ file.id }}</td>
-                  <td class="px-4 py-3">{{ file.original_name }}</td>
-                  <td class="px-4 py-3">{{ file.mime_type }}</td>
-                  <td class="px-4 py-3">{{ file.file_size }}</td>
-                  <td class="px-4 py-3 text-xs">{{ file.sha256 }}</td>
-                </tr>
-                <tr v-if="!attachments.length">
-                  <td colspan="5" class="px-4 py-6 text-center text-muted-foreground">No attachments for this case.</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </CardContent>
-      </Card>
+            <div class="overflow-x-auto rounded-lg border border-border">
+              <table class="min-w-full divide-y divide-border text-sm">
+                <thead class="bg-muted/60 text-left text-xs uppercase tracking-wide text-muted-foreground">
+                  <tr>
+                    <th class="px-4 py-3">ID</th>
+                    <th class="px-4 py-3">Name</th>
+                    <th class="px-4 py-3">MIME</th>
+                    <th class="px-4 py-3">Size</th>
+                    <th class="px-4 py-3">SHA256</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-border">
+                  <tr v-for="file in attachments" :key="file.id" class="hover:bg-accent/40">
+                    <td class="px-4 py-3">{{ file.id }}</td>
+                    <td class="px-4 py-3">{{ file.original_name }}</td>
+                    <td class="px-4 py-3">{{ file.mime_type }}</td>
+                    <td class="px-4 py-3">{{ file.file_size }}</td>
+                    <td class="px-4 py-3 text-xs">{{ file.sha256 }}</td>
+                  </tr>
+                  <tr v-if="!attachments.length">
+                    <td colspan="5" class="px-4 py-6 text-center text-muted-foreground">No attachments for this case.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader class="pb-2">
+            <CardTitle>Case Processing History</CardTitle>
+          </CardHeader>
+          <CardContent class="space-y-3">
+            <Input v-model="selectedCaseId" placeholder="Selected case ID" @keyup.enter="loadHistory" />
+            <Button variant="outline" :loading="historyLoading" @click="loadHistory">Refresh History</Button>
+
+            <div v-if="historyLoading" class="rounded-lg border border-border p-3 text-sm text-muted-foreground">
+              Loading history...
+            </div>
+            <div v-else class="max-h-[340px] space-y-2 overflow-auto pr-1">
+              <div v-for="entry in caseHistory" :key="entry.id" class="rounded-lg border border-border bg-muted/20 p-3 text-xs">
+                <div class="flex items-center justify-between gap-2">
+                  <p class="font-semibold text-foreground">{{ entry.action_type }}</p>
+                  <p class="text-muted-foreground">{{ entry.created_at }}</p>
+                </div>
+                <p class="mt-1 text-muted-foreground">From: {{ entry.from_status || "-" }} → To: {{ entry.to_status || "-" }}</p>
+                <p class="mt-1 text-muted-foreground">Assigned To: {{ entry.assigned_to || "-" }} • Changed By: {{ entry.changed_by }}</p>
+                <p class="mt-1 text-muted-foreground">Note: {{ entry.note || "-" }}</p>
+                <pre class="mt-2 overflow-auto rounded bg-background p-2 text-[11px] text-muted-foreground">{{ JSON.stringify(entry.details || {}, null, 2) }}</pre>
+              </div>
+              <div v-if="!caseHistory.length" class="rounded-lg border border-dashed border-border p-3 text-center text-xs text-muted-foreground">
+                No history for this case.
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
     </template>
   </div>
 </template>

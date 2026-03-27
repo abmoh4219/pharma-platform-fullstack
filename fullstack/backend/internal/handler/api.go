@@ -2,7 +2,6 @@ package handler
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -17,12 +16,17 @@ import (
 	"pharma-platform/internal/config"
 	"pharma-platform/internal/middleware"
 	"pharma-platform/internal/security"
+	"pharma-platform/internal/service"
 )
 
 type API struct {
-	db     *sql.DB
-	cfg    config.Config
-	cipher *security.FieldCipher
+	db            *sql.DB
+	cfg           config.Config
+	cipher        *security.FieldCipher
+	auditSvc      *service.AuditService
+	recruitSvc    *service.RecruitmentService
+	complianceSvc *service.ComplianceService
+	caseSvc       *service.CaseService
 }
 
 func NewAPI(cfg config.Config, db *sql.DB) (*API, error) {
@@ -38,7 +42,15 @@ func NewAPI(cfg config.Config, db *sql.DB) (*API, error) {
 		return nil, fmt.Errorf("create upload tmp dir: %w", err)
 	}
 
-	return &API{db: db, cfg: cfg, cipher: cipher}, nil
+	return &API{
+		db:            db,
+		cfg:           cfg,
+		cipher:        cipher,
+		auditSvc:      service.NewAuditService(db),
+		recruitSvc:    service.NewRecruitmentService(db, cipher),
+		complianceSvc: service.NewComplianceService(db),
+		caseSvc:       service.NewCaseService(db),
+	}, nil
 }
 
 func (a *API) Health(c *gin.Context) {
@@ -122,7 +134,10 @@ func (a *API) Login(c *gin.Context) {
 		return
 	}
 
-	a.logAudit(c, user.ID, "auth.login", "auth", strconv.FormatInt(user.ID, 10), gin.H{
+	a.logAuditDetailed(c, user.ID, "auth", "INFO", "auth.login", "auth", strconv.FormatInt(user.ID, 10), nil, gin.H{
+		"username": user.Username,
+		"jti":      jti,
+	}, gin.H{
 		"username": user.Username,
 		"jti":      jti,
 	})
@@ -162,7 +177,10 @@ func (a *API) Logout(c *gin.Context) {
 		return
 	}
 
-	a.logAudit(c, user.ID, "auth.logout", "auth", strconv.FormatInt(user.ID, 10), gin.H{
+	a.logAuditDetailed(c, user.ID, "auth", "INFO", "auth.logout", "auth", strconv.FormatInt(user.ID, 10), nil, gin.H{
+		"username": user.Username,
+		"jti":      claims.ID,
+	}, gin.H{
 		"username": user.Username,
 		"jti":      claims.ID,
 	})
@@ -170,12 +188,28 @@ func (a *API) Logout(c *gin.Context) {
 	writeSuccess(c, http.StatusOK, gin.H{"message": "logged out"})
 }
 
+func (a *API) logPermissionChange(c *gin.Context, userID int64, moduleName, recordID string, before any, after any, details any) {
+	a.logAuditDetailed(c, userID, "permission", "INFO", "auth.permission.change", moduleName, recordID, before, after, details)
+}
+
 func (a *API) logAudit(c *gin.Context, userID int64, action, moduleName, recordID string, details any) {
-	detailsBytes, _ := json.Marshal(details)
-	_, _ = a.db.Exec(`
-		INSERT INTO audit_logs (user_id, action, module_name, record_id, details_json, ip_address, user_agent)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, userID, action, moduleName, recordID, string(detailsBytes), c.ClientIP(), c.GetHeader("User-Agent"))
+	a.logAuditDetailed(c, userID, "general", "INFO", action, moduleName, recordID, nil, details, details)
+}
+
+func (a *API) logAuditDetailed(c *gin.Context, userID int64, category, level, action, moduleName, recordID string, before any, after any, details any) {
+	_ = a.auditSvc.Log(c.Request.Context(), service.AuditEvent{
+		UserID:     userID,
+		Category:   category,
+		Level:      level,
+		Action:     action,
+		ModuleName: moduleName,
+		RecordID:   recordID,
+		Before:     before,
+		After:      after,
+		Details:    details,
+		IPAddress:  c.ClientIP(),
+		UserAgent:  c.GetHeader("User-Agent"),
+	})
 }
 
 func parseDate(value string) (time.Time, error) {

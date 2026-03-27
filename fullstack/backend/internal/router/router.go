@@ -2,7 +2,6 @@ package router
 
 import (
 	"database/sql"
-	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -10,6 +9,7 @@ import (
 
 	"pharma-platform/internal/config"
 	"pharma-platform/internal/handler"
+	"pharma-platform/internal/logging"
 	"pharma-platform/internal/middleware"
 )
 
@@ -22,12 +22,12 @@ func New(cfg config.Config, db *sql.DB) *gin.Engine {
 	r := gin.New()
 	r.HandleMethodNotAllowed = true
 	if err := r.SetTrustedProxies(nil); err != nil {
-		log.Printf("failed to set trusted proxies: %v", err)
+		logging.Warn("router", "failed to set trusted proxies", map[string]any{"error": err.Error()})
 	}
 
 	r.Use(
 		gin.CustomRecovery(func(c *gin.Context, recovered any) {
-			log.Printf("panic recovered: %v", recovered)
+			logging.Error("router", "panic recovered", map[string]any{"recovered": recovered})
 			middleware.AbortWithError(c, http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", "internal server error")
 		}),
 		middleware.RequestContext(),
@@ -43,7 +43,8 @@ func New(cfg config.Config, db *sql.DB) *gin.Engine {
 
 	apiHandler, err := handler.NewAPI(cfg, db)
 	if err != nil {
-		log.Fatalf("failed to initialize API handlers: %v", err)
+		logging.Error("router", "failed to initialize API handlers", map[string]any{"error": err.Error()})
+		panic(err)
 	}
 	authMiddleware := middleware.NewAuthMiddleware(db, cfg)
 
@@ -58,6 +59,7 @@ func New(cfg config.Config, db *sql.DB) *gin.Engine {
 	{
 		protected.GET("/auth/me", apiHandler.Me)
 		protected.POST("/auth/logout", apiHandler.Logout)
+		protected.PUT("/auth/users/:id/permissions", middleware.RequireRoles("system_admin"), apiHandler.UpdateUserPermission)
 
 		protected.GET("/dashboard/summary", apiHandler.DashboardSummary)
 
@@ -73,6 +75,8 @@ func New(cfg config.Config, db *sql.DB) *gin.Engine {
 			recruitment.POST("/candidates/import", apiHandler.ImportCandidates)
 			recruitment.POST("/candidates/merge", apiHandler.MergeCandidates)
 			recruitment.GET("/candidates/search", apiHandler.SmartSearchCandidates)
+			recruitment.GET("/candidates/:id/match-score", apiHandler.CandidateMatchScore)
+			recruitment.GET("/candidates/:id/recommendations", apiHandler.CandidateRecommendations)
 		}
 
 		compliance := protected.Group("/compliance")
@@ -98,6 +102,7 @@ func New(cfg config.Config, db *sql.DB) *gin.Engine {
 			cases.PUT("/:id/assign", apiHandler.AssignCase)
 			cases.PUT("/:id/status", apiHandler.UpdateCaseStatus)
 			cases.GET("/:id/attachments", apiHandler.ListCaseAttachments)
+			cases.GET("/:id/history", apiHandler.ListCaseHistory)
 		}
 
 		files := protected.Group("/files")

@@ -1,57 +1,64 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
-import { ShieldCheck } from 'lucide-vue-next'
-import { toast } from 'vue-sonner'
+import { computed, onMounted, reactive, ref } from "vue"
+import { ShieldCheck } from "lucide-vue-next"
+import { toast } from "vue-sonner"
 
-import Badge from '@/components/ui/badge/Badge.vue'
-import Button from '@/components/ui/button/Button.vue'
-import Card from '@/components/ui/card/Card.vue'
-import CardContent from '@/components/ui/card/CardContent.vue'
-import CardHeader from '@/components/ui/card/CardHeader.vue'
-import CardTitle from '@/components/ui/card/CardTitle.vue'
-import ConfirmDialog from '@/components/ui/dialog/ConfirmDialog.vue'
-import Input from '@/components/ui/input/Input.vue'
-import Spinner from '@/components/ui/spinner/Spinner.vue'
-import Textarea from '@/components/ui/textarea/Textarea.vue'
+import Badge from "@/components/ui/badge/Badge.vue"
+import Button from "@/components/ui/button/Button.vue"
+import Card from "@/components/ui/card/Card.vue"
+import CardContent from "@/components/ui/card/CardContent.vue"
+import CardHeader from "@/components/ui/card/CardHeader.vue"
+import CardTitle from "@/components/ui/card/CardTitle.vue"
+import ConfirmDialog from "@/components/ui/dialog/ConfirmDialog.vue"
+import Input from "@/components/ui/input/Input.vue"
+import Spinner from "@/components/ui/spinner/Spinner.vue"
+import Textarea from "@/components/ui/textarea/Textarea.vue"
 
-import { api } from '../services/api'
+import { api } from "../services/api"
 
 const loading = ref(false)
-const activeTab = ref('qualifications')
+const activeTab = ref("qualifications")
 
 const qualifications = ref([])
 const restrictions = ref([])
 
 const deleting = ref(false)
 const deleteTarget = reactive({
-  type: '',
+  type: "",
   id: null,
 })
 const deleteDialogOpen = ref(false)
 
 const qualificationForm = reactive({
   id: null,
-  entity_type: 'supplier',
-  entity_name: '',
-  qualification_code: '',
-  issue_date: '',
-  expiry_date: '',
-  status: 'active',
-  notes: '',
+  entity_type: "supplier",
+  entity_name: "",
+  qualification_code: "",
+  issue_date: "",
+  expiry_date: "",
+  status: "active",
+  notes: "",
 })
 
 const restrictionForm = reactive({
   id: null,
-  med_name: '',
-  rule_type: 'controlled_purchase_limit',
+  med_name: "",
+  rule_type: "controlled_purchase_limit",
   max_quantity: 1,
   requires_approval: true,
+  requires_prescription: true,
+  min_interval_days: 7,
+  fee_amount: 0,
+  fee_currency: "USD",
   is_active: true,
 })
 
 const checkForm = reactive({
-  med_name: '',
-  quantity: '',
+  med_name: "",
+  quantity: "",
+  client_id: "",
+  prescription_attachment_id: "",
+  record_purchase: true,
 })
 const checkResult = ref(null)
 
@@ -59,9 +66,9 @@ const qualificationRows = computed(() => qualifications.value)
 const restrictionRows = computed(() => restrictions.value)
 
 function expiryVariant(days) {
-  if (days < 0) return 'danger'
-  if (days <= 30) return 'warning'
-  return 'success'
+  if (days < 0) return "danger"
+  if (days <= 30) return "warning"
+  return "success"
 }
 
 async function loadData() {
@@ -71,7 +78,7 @@ async function loadData() {
     qualifications.value = qualData
     restrictions.value = restData
   } catch (err) {
-    toast.error(err.message || 'Failed to load compliance data')
+    toast.error(err.message || "Failed to load compliance data")
   } finally {
     loading.value = false
   }
@@ -79,13 +86,13 @@ async function loadData() {
 
 function resetQualification() {
   qualificationForm.id = null
-  qualificationForm.entity_type = 'supplier'
-  qualificationForm.entity_name = ''
-  qualificationForm.qualification_code = ''
-  qualificationForm.issue_date = ''
-  qualificationForm.expiry_date = ''
-  qualificationForm.status = 'active'
-  qualificationForm.notes = ''
+  qualificationForm.entity_type = "supplier"
+  qualificationForm.entity_name = ""
+  qualificationForm.qualification_code = ""
+  qualificationForm.issue_date = ""
+  qualificationForm.expiry_date = ""
+  qualificationForm.status = "active"
+  qualificationForm.notes = ""
 }
 
 function editQualification(row) {
@@ -96,7 +103,7 @@ function editQualification(row) {
   qualificationForm.issue_date = row.issue_date
   qualificationForm.expiry_date = row.expiry_date
   qualificationForm.status = row.status
-  qualificationForm.notes = ''
+  qualificationForm.notes = ""
 }
 
 async function saveQualification() {
@@ -106,7 +113,7 @@ async function saveQualification() {
     !qualificationForm.issue_date ||
     !qualificationForm.expiry_date
   ) {
-    toast.warning('Please complete required qualification fields')
+    toast.warning("Please complete required qualification fields")
     return
   }
 
@@ -114,30 +121,34 @@ async function saveQualification() {
     const payload = { ...qualificationForm }
     if (qualificationForm.id) {
       await api.updateQualification(qualificationForm.id, payload)
-      toast.success('Qualification updated')
+      toast.success("Qualification updated")
     } else {
       await api.createQualification(payload)
-      toast.success('Qualification created')
+      toast.success("Qualification created")
     }
     resetQualification()
     await loadData()
   } catch (err) {
-    toast.error(err.message || 'Failed to save qualification')
+    toast.error(err.message || "Failed to save qualification")
   }
 }
 
 function requestDeleteQualification(id) {
-  deleteTarget.type = 'qualification'
+  deleteTarget.type = "qualification"
   deleteTarget.id = id
   deleteDialogOpen.value = true
 }
 
 function resetRestriction() {
   restrictionForm.id = null
-  restrictionForm.med_name = ''
-  restrictionForm.rule_type = 'controlled_purchase_limit'
+  restrictionForm.med_name = ""
+  restrictionForm.rule_type = "controlled_purchase_limit"
   restrictionForm.max_quantity = 1
   restrictionForm.requires_approval = true
+  restrictionForm.requires_prescription = true
+  restrictionForm.min_interval_days = 7
+  restrictionForm.fee_amount = 0
+  restrictionForm.fee_currency = "USD"
   restrictionForm.is_active = true
 }
 
@@ -147,12 +158,16 @@ function editRestriction(row) {
   restrictionForm.rule_type = row.rule_type
   restrictionForm.max_quantity = row.max_quantity
   restrictionForm.requires_approval = row.requires_approval
+  restrictionForm.requires_prescription = row.requires_prescription
+  restrictionForm.min_interval_days = row.min_interval_days
+  restrictionForm.fee_amount = row.fee_amount
+  restrictionForm.fee_currency = row.fee_currency
   restrictionForm.is_active = row.is_active
 }
 
 async function saveRestriction() {
   if (!restrictionForm.med_name.trim() || !restrictionForm.rule_type.trim() || Number(restrictionForm.max_quantity) <= 0) {
-    toast.warning('Please complete required restriction fields')
+    toast.warning("Please complete required restriction fields")
     return
   }
 
@@ -160,23 +175,26 @@ async function saveRestriction() {
     const payload = {
       ...restrictionForm,
       max_quantity: Number(restrictionForm.max_quantity),
+      min_interval_days: Number(restrictionForm.min_interval_days || 7),
+      fee_amount: Number(restrictionForm.fee_amount || 0),
+      fee_currency: String(restrictionForm.fee_currency || "USD").toUpperCase(),
     }
     if (restrictionForm.id) {
       await api.updateRestriction(restrictionForm.id, payload)
-      toast.success('Restriction updated')
+      toast.success("Restriction updated")
     } else {
       await api.createRestriction(payload)
-      toast.success('Restriction created')
+      toast.success("Restriction created")
     }
     resetRestriction()
     await loadData()
   } catch (err) {
-    toast.error(err.message || 'Failed to save restriction')
+    toast.error(err.message || "Failed to save restriction")
   }
 }
 
 function requestDeleteRestriction(id) {
-  deleteTarget.type = 'restriction'
+  deleteTarget.type = "restriction"
   deleteTarget.id = id
   deleteDialogOpen.value = true
 }
@@ -187,27 +205,27 @@ async function confirmDelete() {
 
   deleting.value = true
   try {
-    if (deleteTarget.type === 'qualification') {
+    if (deleteTarget.type === "qualification") {
       await api.deleteQualification(deleteTarget.id)
-      toast.success('Qualification deleted')
+      toast.success("Qualification deleted")
     } else {
       await api.deleteRestriction(deleteTarget.id)
-      toast.success('Restriction deleted')
+      toast.success("Restriction deleted")
     }
     deleteDialogOpen.value = false
-    deleteTarget.type = ''
+    deleteTarget.type = ""
     deleteTarget.id = null
     await loadData()
   } catch (err) {
-    toast.error(err.message || 'Delete failed')
+    toast.error(err.message || "Delete failed")
   } finally {
     deleting.value = false
   }
 }
 
 async function checkControlledRule() {
-  if (!checkForm.med_name.trim() || Number(checkForm.quantity) <= 0) {
-    toast.warning('Enter medication and positive quantity')
+  if (!checkForm.med_name.trim() || Number(checkForm.quantity) <= 0 || !checkForm.client_id.trim()) {
+    toast.warning("Enter medication, positive quantity, and client ID")
     return
   }
 
@@ -215,9 +233,15 @@ async function checkControlledRule() {
     checkResult.value = await api.checkRestriction({
       med_name: checkForm.med_name,
       quantity: Number(checkForm.quantity),
+      client_id: checkForm.client_id.trim(),
+      prescription_attachment_id: checkForm.prescription_attachment_id
+        ? Number(checkForm.prescription_attachment_id)
+        : undefined,
+      record_purchase: Boolean(checkForm.record_purchase),
     })
   } catch (err) {
-    toast.error(err.message || 'Failed to check restriction')
+    checkResult.value = null
+    toast.error(err.message || "Failed to check restriction")
   }
 }
 
@@ -236,18 +260,10 @@ onMounted(loadData)
 
     <div class="rounded-xl border border-border bg-card p-2">
       <div class="flex flex-wrap gap-2">
-        <Button
-          :variant="activeTab === 'qualifications' ? 'default' : 'outline'"
-          size="sm"
-          @click="activeTab = 'qualifications'"
-        >
+        <Button :variant="activeTab === 'qualifications' ? 'default' : 'outline'" size="sm" @click="activeTab = 'qualifications'">
           Qualifications
         </Button>
-        <Button
-          :variant="activeTab === 'restrictions' ? 'default' : 'outline'"
-          size="sm"
-          @click="activeTab = 'restrictions'"
-        >
+        <Button :variant="activeTab === 'restrictions' ? 'default' : 'outline'" size="sm" @click="activeTab = 'restrictions'">
           Controlled Meds Rules
         </Button>
       </div>
@@ -262,7 +278,7 @@ onMounted(loadData)
         <div class="panel-grid-2">
           <Card>
             <CardHeader class="pb-2">
-              <CardTitle>{{ qualificationForm.id ? 'Edit Qualification' : 'Create Qualification' }}</CardTitle>
+              <CardTitle>{{ qualificationForm.id ? "Edit Qualification" : "Create Qualification" }}</CardTitle>
             </CardHeader>
             <CardContent class="space-y-3">
               <div class="grid grid-cols-1 gap-3 lg:grid-cols-2">
@@ -304,7 +320,7 @@ onMounted(loadData)
               </div>
 
               <div class="flex flex-wrap gap-2">
-                <Button @click="saveQualification">{{ qualificationForm.id ? 'Update' : 'Create' }} Qualification</Button>
+                <Button @click="saveQualification">{{ qualificationForm.id ? "Update" : "Create" }} Qualification</Button>
                 <Button variant="outline" @click="resetQualification">Reset</Button>
               </div>
             </CardContent>
@@ -315,15 +331,9 @@ onMounted(loadData)
               <CardTitle>Expiration Guidance</CardTitle>
             </CardHeader>
             <CardContent class="space-y-3 text-sm">
-              <div class="rounded-lg border border-danger/30 bg-danger/10 p-3 text-danger">
-                Red highlight appears for records expiring within 30 days.
-              </div>
-              <div class="rounded-lg border border-warning/30 bg-warning/10 p-3 text-warning">
-                Expired records are auto-deactivated by backend policy.
-              </div>
-              <div class="rounded-lg border border-success/30 bg-success/10 p-3 text-success">
-                Keep issue and expiry dates accurate to prevent procurement delays.
-              </div>
+              <div class="rounded-lg border border-danger/30 bg-danger/10 p-3 text-danger">Red highlight appears for records expiring within 30 days.</div>
+              <div class="rounded-lg border border-warning/30 bg-warning/10 p-3 text-warning">Expired records are auto-deactivated by backend policy.</div>
+              <div class="rounded-lg border border-success/30 bg-success/10 p-3 text-success">Keep issue and expiry dates accurate to prevent procurement delays.</div>
             </CardContent>
           </Card>
         </div>
@@ -347,20 +357,14 @@ onMounted(loadData)
                 </tr>
               </thead>
               <tbody class="divide-y divide-border">
-                <tr
-                  v-for="row in qualificationRows"
-                  :key="row.id"
-                  :class="row.highlight_red ? 'bg-danger/5' : 'hover:bg-accent/40'"
-                >
+                <tr v-for="row in qualificationRows" :key="row.id" :class="row.highlight_red ? 'bg-danger/5' : 'hover:bg-accent/40'">
                   <td class="px-4 py-3">{{ row.id }}</td>
                   <td class="px-4 py-3 capitalize">{{ row.entity_type }}</td>
                   <td class="px-4 py-3 font-medium text-foreground">{{ row.entity_name }}</td>
                   <td class="px-4 py-3">{{ row.qualification_code }}</td>
                   <td class="px-4 py-3">{{ row.expiry_date }}</td>
                   <td class="px-4 py-3">
-                    <Badge :variant="expiryVariant(row.days_to_expiry)">
-                      {{ row.days_to_expiry }} day(s)
-                    </Badge>
+                    <Badge :variant="expiryVariant(row.days_to_expiry)">{{ row.days_to_expiry }} day(s)</Badge>
                   </td>
                   <td class="px-4 py-3">
                     <Badge :variant="row.status === 'active' ? 'success' : 'outline'">{{ row.status }}</Badge>
@@ -385,7 +389,7 @@ onMounted(loadData)
         <div class="panel-grid-2">
           <Card>
             <CardHeader class="pb-2">
-              <CardTitle>{{ restrictionForm.id ? 'Edit Restriction' : 'Create Restriction' }}</CardTitle>
+              <CardTitle>{{ restrictionForm.id ? "Edit Restriction" : "Create Restriction" }}</CardTitle>
             </CardHeader>
             <CardContent class="space-y-3">
               <div class="grid grid-cols-1 gap-3 lg:grid-cols-2">
@@ -409,6 +413,25 @@ onMounted(loadData)
                   </select>
                 </div>
                 <div>
+                  <label class="field-label">Requires prescription</label>
+                  <select v-model="restrictionForm.requires_prescription" class="form-select">
+                    <option :value="true">Yes</option>
+                    <option :value="false">No</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="field-label">Min interval days (per client)</label>
+                  <Input v-model="restrictionForm.min_interval_days" type="number" min="1" step="1" />
+                </div>
+                <div>
+                  <label class="field-label">Fee amount</label>
+                  <Input v-model="restrictionForm.fee_amount" type="number" min="0" step="0.01" />
+                </div>
+                <div>
+                  <label class="field-label">Fee currency</label>
+                  <Input v-model="restrictionForm.fee_currency" placeholder="USD" />
+                </div>
+                <div>
                   <label class="field-label">Active</label>
                   <select v-model="restrictionForm.is_active" class="form-select">
                     <option :value="true">Active</option>
@@ -418,7 +441,7 @@ onMounted(loadData)
               </div>
 
               <div class="flex flex-wrap gap-2">
-                <Button @click="saveRestriction">{{ restrictionForm.id ? 'Update' : 'Create' }} Restriction</Button>
+                <Button @click="saveRestriction">{{ restrictionForm.id ? "Update" : "Create" }} Restriction</Button>
                 <Button variant="outline" @click="resetRestriction">Reset</Button>
               </div>
             </CardContent>
@@ -437,14 +460,33 @@ onMounted(loadData)
                 <label class="field-label">Quantity</label>
                 <Input v-model="checkForm.quantity" type="number" min="1" step="0.01" />
               </div>
+              <div>
+                <label class="field-label">Client ID</label>
+                <Input v-model="checkForm.client_id" placeholder="client-123" />
+              </div>
+              <div>
+                <label class="field-label">Prescription Attachment ID (required if rule enforces prescription)</label>
+                <Input v-model="checkForm.prescription_attachment_id" type="number" min="1" step="1" />
+              </div>
+              <div>
+                <label class="field-label">Record purchase</label>
+                <select v-model="checkForm.record_purchase" class="form-select">
+                  <option :value="true">Yes</option>
+                  <option :value="false">No</option>
+                </select>
+              </div>
               <Button variant="outline" @click="checkControlledRule">
                 <ShieldCheck class="h-4 w-4" />
                 Check Rule
               </Button>
 
               <div v-if="checkResult" class="rounded-lg border p-3" :class="checkResult.allowed ? 'border-success/40 bg-success/10 text-success' : 'border-danger/40 bg-danger/10 text-danger'">
-                <p class="font-semibold">{{ checkResult.allowed ? 'Purchase Allowed' : 'Purchase Blocked' }}</p>
+                <p class="font-semibold">{{ checkResult.allowed ? "Purchase Allowed" : "Purchase Blocked" }}</p>
                 <p class="text-xs">Reason: {{ checkResult.reason }}</p>
+                <p class="text-xs">Rule ID: {{ checkResult.rule_id || "-" }}</p>
+                <p class="text-xs">Prescription required: {{ checkResult.requires_prescription ? "Yes" : "No" }}</p>
+                <p class="text-xs">Interval days: {{ checkResult.min_interval_days }}</p>
+                <p class="text-xs">Recorded: {{ checkResult.recorded ? "Yes" : "No" }}</p>
               </div>
             </CardContent>
           </Card>
@@ -462,6 +504,9 @@ onMounted(loadData)
                   <th class="px-4 py-3">Medication</th>
                   <th class="px-4 py-3">Rule</th>
                   <th class="px-4 py-3">Max Qty</th>
+                  <th class="px-4 py-3">Prescription</th>
+                  <th class="px-4 py-3">Interval</th>
+                  <th class="px-4 py-3">Fee</th>
                   <th class="px-4 py-3">Approval</th>
                   <th class="px-4 py-3">State</th>
                   <th class="px-4 py-3 text-right">Actions</th>
@@ -473,13 +518,14 @@ onMounted(loadData)
                   <td class="px-4 py-3 font-medium text-foreground">{{ row.med_name }}</td>
                   <td class="px-4 py-3">{{ row.rule_type }}</td>
                   <td class="px-4 py-3">{{ row.max_quantity }}</td>
+                  <td class="px-4 py-3">{{ row.requires_prescription ? "Required" : "Optional" }}</td>
+                  <td class="px-4 py-3">{{ row.min_interval_days }} day(s)</td>
+                  <td class="px-4 py-3">{{ row.fee_amount }} {{ row.fee_currency }}</td>
                   <td class="px-4 py-3">
-                    <Badge :variant="row.requires_approval ? 'warning' : 'success'">
-                      {{ row.requires_approval ? 'Required' : 'Not required' }}
-                    </Badge>
+                    <Badge :variant="row.requires_approval ? 'warning' : 'success'">{{ row.requires_approval ? "Required" : "Not required" }}</Badge>
                   </td>
                   <td class="px-4 py-3">
-                    <Badge :variant="row.is_active ? 'success' : 'outline'">{{ row.is_active ? 'Active' : 'Inactive' }}</Badge>
+                    <Badge :variant="row.is_active ? 'success' : 'outline'">{{ row.is_active ? "Active" : "Inactive" }}</Badge>
                   </td>
                   <td class="px-4 py-3 text-right">
                     <div class="inline-flex gap-2">
@@ -489,7 +535,7 @@ onMounted(loadData)
                   </td>
                 </tr>
                 <tr v-if="!restrictionRows.length">
-                  <td colspan="7" class="px-4 py-6 text-center text-muted-foreground">No restriction rules found.</td>
+                  <td colspan="10" class="px-4 py-6 text-center text-muted-foreground">No restriction rules found.</td>
                 </tr>
               </tbody>
             </table>

@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"encoding/csv"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -14,6 +15,8 @@ import (
 func (a *API) ListAuditLogs(c *gin.Context) {
 	moduleFilter := strings.TrimSpace(c.Query("module"))
 	actionFilter := strings.TrimSpace(c.Query("action"))
+	categoryFilter := strings.TrimSpace(c.Query("category"))
+	levelFilter := strings.TrimSpace(c.Query("level"))
 	userIDFilter := strings.TrimSpace(c.Query("user_id"))
 	queryFilter := strings.TrimSpace(c.Query("q"))
 	fromFilter := strings.TrimSpace(c.Query("from"))
@@ -30,6 +33,14 @@ func (a *API) ListAuditLogs(c *gin.Context) {
 		whereParts = append(whereParts, "al.action = ?")
 		args = append(args, actionFilter)
 	}
+	if categoryFilter != "" {
+		whereParts = append(whereParts, "al.category = ?")
+		args = append(args, categoryFilter)
+	}
+	if levelFilter != "" {
+		whereParts = append(whereParts, "al.level = ?")
+		args = append(args, strings.ToUpper(levelFilter))
+	}
 	if userIDFilter != "" {
 		uid, err := strconv.ParseInt(userIDFilter, 10, 64)
 		if err != nil {
@@ -41,8 +52,8 @@ func (a *API) ListAuditLogs(c *gin.Context) {
 	}
 	if queryFilter != "" {
 		like := "%" + strings.ToLower(queryFilter) + "%"
-		whereParts = append(whereParts, "(LOWER(al.record_id) LIKE ? OR LOWER(CAST(al.details_json AS CHAR)) LIKE ?)")
-		args = append(args, like, like)
+		whereParts = append(whereParts, "(LOWER(al.record_id) LIKE ? OR LOWER(CAST(al.details_json AS CHAR)) LIKE ? OR LOWER(CAST(al.diff_json AS CHAR)) LIKE ?)")
+		args = append(args, like, like, like)
 	}
 	if fromFilter != "" {
 		fromTime, err := time.Parse("2006-01-02", fromFilter)
@@ -90,8 +101,10 @@ func (a *API) ListAuditLogs(c *gin.Context) {
 
 	whereClause := strings.Join(whereParts, " AND ")
 	rows, err := a.db.Query(`
-		SELECT al.id, al.user_id, COALESCE(u.username, ''), al.action, al.module_name, al.record_id,
-		       COALESCE(CAST(al.details_json AS CHAR), ''), COALESCE(al.ip_address, ''), COALESCE(al.user_agent, ''), al.created_at
+		SELECT al.id, al.user_id, COALESCE(u.username, ''), COALESCE(al.category, 'general'), COALESCE(al.level, 'INFO'),
+		       al.action, al.module_name, al.record_id, COALESCE(CAST(al.before_json AS CHAR), 'null'),
+		       COALESCE(CAST(al.after_json AS CHAR), 'null'), COALESCE(CAST(al.diff_json AS CHAR), 'null'),
+		       COALESCE(CAST(al.details_json AS CHAR), 'null'), COALESCE(al.ip_address, ''), COALESCE(al.user_agent, ''), al.created_at
 		FROM audit_logs al
 		LEFT JOIN users u ON u.id = al.user_id
 		WHERE `+whereClause+`
@@ -110,15 +123,20 @@ func (a *API) ListAuditLogs(c *gin.Context) {
 			id        int64
 			userID    int64
 			username  string
+			category  string
+			level     string
 			action    string
 			module    string
 			recordID  string
-			details   string
+			beforeRaw string
+			afterRaw  string
+			diffRaw   string
+			detailsRaw string
 			ip        string
 			userAgent string
 			createdAt time.Time
 		)
-		if err := rows.Scan(&id, &userID, &username, &action, &module, &recordID, &details, &ip, &userAgent, &createdAt); err != nil {
+		if err := rows.Scan(&id, &userID, &username, &category, &level, &action, &module, &recordID, &beforeRaw, &afterRaw, &diffRaw, &detailsRaw, &ip, &userAgent, &createdAt); err != nil {
 			writeError(c, http.StatusInternalServerError, "DB_ERROR", "failed to scan audit logs")
 			return
 		}
@@ -126,10 +144,15 @@ func (a *API) ListAuditLogs(c *gin.Context) {
 			"id":          id,
 			"user_id":     userID,
 			"username":    username,
+			"category":    category,
+			"level":       level,
 			"action":      action,
 			"module_name": module,
 			"record_id":   recordID,
-			"details":     details,
+			"before":      parseAuditJSON(beforeRaw),
+			"after":       parseAuditJSON(afterRaw),
+			"diff":        parseAuditJSON(diffRaw),
+			"details":     parseAuditJSON(detailsRaw),
 			"ip_address":  ip,
 			"user_agent":  userAgent,
 			"created_at":  createdAt.Format(time.RFC3339),
@@ -153,6 +176,8 @@ func (a *API) ListAuditLogs(c *gin.Context) {
 func (a *API) ExportAuditLogs(c *gin.Context) {
 	moduleFilter := strings.TrimSpace(c.Query("module"))
 	actionFilter := strings.TrimSpace(c.Query("action"))
+	categoryFilter := strings.TrimSpace(c.Query("category"))
+	levelFilter := strings.TrimSpace(c.Query("level"))
 
 	whereParts := []string{"1=1"}
 	args := make([]any, 0)
@@ -164,9 +189,20 @@ func (a *API) ExportAuditLogs(c *gin.Context) {
 		whereParts = append(whereParts, "action = ?")
 		args = append(args, actionFilter)
 	}
+	if categoryFilter != "" {
+		whereParts = append(whereParts, "category = ?")
+		args = append(args, categoryFilter)
+	}
+	if levelFilter != "" {
+		whereParts = append(whereParts, "level = ?")
+		args = append(args, strings.ToUpper(levelFilter))
+	}
 
 	rows, err := a.db.Query(`
-		SELECT id, user_id, action, module_name, record_id, COALESCE(CAST(details_json AS CHAR), ''), COALESCE(ip_address, ''), COALESCE(user_agent, ''), created_at
+		SELECT id, user_id, COALESCE(category, 'general'), COALESCE(level, 'INFO'), action, module_name, record_id,
+		       COALESCE(CAST(before_json AS CHAR), 'null'), COALESCE(CAST(after_json AS CHAR), 'null'),
+		       COALESCE(CAST(diff_json AS CHAR), 'null'), COALESCE(CAST(details_json AS CHAR), 'null'),
+		       COALESCE(ip_address, ''), COALESCE(user_agent, ''), created_at
 		FROM audit_logs
 		WHERE `+strings.Join(whereParts, " AND ")+`
 		ORDER BY id DESC
@@ -180,31 +216,41 @@ func (a *API) ExportAuditLogs(c *gin.Context) {
 
 	buf := bytes.NewBuffer(nil)
 	writer := csv.NewWriter(buf)
-	_ = writer.Write([]string{"id", "user_id", "action", "module_name", "record_id", "details", "ip_address", "user_agent", "created_at"})
+	_ = writer.Write([]string{"id", "user_id", "category", "level", "action", "module_name", "record_id", "before", "after", "diff", "details", "ip_address", "user_agent", "created_at"})
 
 	for rows.Next() {
 		var (
 			id        int64
 			userID    int64
+			category  string
+			level     string
 			action    string
 			module    string
 			recordID  string
-			details   string
+			beforeRaw string
+			afterRaw  string
+			diffRaw   string
+			detailsRaw string
 			ip        string
 			userAgent string
 			createdAt time.Time
 		)
-		if err := rows.Scan(&id, &userID, &action, &module, &recordID, &details, &ip, &userAgent, &createdAt); err != nil {
+		if err := rows.Scan(&id, &userID, &category, &level, &action, &module, &recordID, &beforeRaw, &afterRaw, &diffRaw, &detailsRaw, &ip, &userAgent, &createdAt); err != nil {
 			writeError(c, http.StatusInternalServerError, "DB_ERROR", "failed to scan audit rows")
 			return
 		}
 		_ = writer.Write([]string{
 			strconv.FormatInt(id, 10),
 			strconv.FormatInt(userID, 10),
+			category,
+			level,
 			action,
 			module,
 			recordID,
-			details,
+			beforeRaw,
+			afterRaw,
+			diffRaw,
+			detailsRaw,
 			ip,
 			userAgent,
 			createdAt.Format(time.RFC3339),
@@ -219,6 +265,18 @@ func (a *API) ExportAuditLogs(c *gin.Context) {
 	c.Header("Content-Type", "text/csv")
 	c.Header("Content-Disposition", "attachment; filename=audit_logs.csv")
 	c.String(http.StatusOK, buf.String())
+}
+
+func parseAuditJSON(raw string) any {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || trimmed == "null" {
+		return nil
+	}
+	var out any
+	if err := json.Unmarshal([]byte(trimmed), &out); err != nil {
+		return trimmed
+	}
+	return out
 }
 
 func parsePositiveIntStrict(raw string, fallback int) (int, error) {

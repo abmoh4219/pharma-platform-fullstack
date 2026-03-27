@@ -3,11 +3,12 @@ package middleware
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"log"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+
+	"pharma-platform/internal/logging"
 )
 
 const ContextRequestID = "request_id"
@@ -25,15 +26,14 @@ func RequestContext() gin.HandlerFunc {
 		c.Next()
 
 		latency := time.Since(start)
-		log.Printf(
-			`request_id=%s method=%s path=%s status=%d latency_ms=%d ip=%s`,
-			reqID,
-			c.Request.Method,
-			c.Request.URL.Path,
-			c.Writer.Status(),
-			latency.Milliseconds(),
-			c.ClientIP(),
-		)
+		logging.Info("request", "request completed", map[string]any{
+			"request_id": reqID,
+			"method":     c.Request.Method,
+			"path":       c.Request.URL.Path,
+			"status":     c.Writer.Status(),
+			"latency_ms": latency.Milliseconds(),
+			"ip":         c.ClientIP(),
+		})
 	}
 }
 

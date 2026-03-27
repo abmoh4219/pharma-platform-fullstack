@@ -1,15 +1,14 @@
 package handler
 
 import (
-	"database/sql"
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -19,46 +18,65 @@ import (
 
 	"pharma-platform/internal/middleware"
 	"pharma-platform/internal/security"
+	"pharma-platform/internal/service"
 )
 
 type createPositionRequest struct {
-	Title       string `json:"title" binding:"required,min=1,max=128"`
-	Description string `json:"description" binding:"max=2000"`
+	Title                string   `json:"title" binding:"required,min=1,max=128"`
+	Description          string   `json:"description" binding:"max=2000"`
+	RequiredSkills       []string `json:"required_skills"`
+	RequiredEducation    string   `json:"required_education_level" binding:"omitempty,max=64"`
+	MinYearsExperience   float64  `json:"min_years_experience" binding:"omitempty,gte=0,lte=60"`
+	TargetTimeToFillDays int      `json:"target_time_to_fill_days" binding:"omitempty,gte=1,lte=365"`
+	Tags                 []string `json:"tags"`
 }
 
 func (a *API) CreatePosition(c *gin.Context) {
 	user, _ := middleware.GetAuthUser(c)
-
 	var req createPositionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		badRequest(c, "INVALID_PAYLOAD", "invalid position payload")
 		return
 	}
-	if strings.TrimSpace(req.Title) == "" {
+
+	title := strings.TrimSpace(req.Title)
+	if title == "" {
 		badRequest(c, "TITLE_REQUIRED", "position title is required")
 		return
 	}
 
+	tags := service.NormalizeTags(req.Tags)
+	tagsJSON, _ := json.Marshal(tags)
+	requiredSkills := strings.Join(service.NormalizeSkills(req.RequiredSkills), ",")
+	targetDays := req.TargetTimeToFillDays
+	if targetDays <= 0 {
+		targetDays = 30
+	}
+
 	res, err := a.db.Exec(`
-		INSERT INTO positions (title, description, institution, department, team, status, created_by)
-		VALUES (?, ?, ?, ?, ?, 'open', ?)
-	`, strings.TrimSpace(req.Title), strPtr(strings.TrimSpace(req.Description)), user.Institution, user.Department, user.Team, user.ID)
+		INSERT INTO positions
+		(title, description, required_skills_text, required_education_level, min_years_experience, target_time_to_fill_days, tags_json,
+		 institution, department, team, status, created_by)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)
+	`, title, strPtr(strings.TrimSpace(req.Description)), strPtr(requiredSkills), strPtr(strings.TrimSpace(req.RequiredEducation)),
+		req.MinYearsExperience, targetDays, string(tagsJSON), user.Institution, user.Department, user.Team, user.ID)
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "DB_ERROR", "failed to create position")
 		return
 	}
 	id, _ := res.LastInsertId()
 
-	a.logAudit(c, user.ID, "recruitment.position.create", "positions", strconv.FormatInt(id, 10), req)
+	a.logAuditDetailed(c, user.ID, "recruitment", "INFO", "recruitment.position.create", "positions", strconv.FormatInt(id, 10), nil, req, req)
 	writeSuccess(c, http.StatusCreated, gin.H{"id": id})
 }
 
 func (a *API) ListPositions(c *gin.Context) {
 	user, _ := middleware.GetAuthUser(c)
 	where, args := middleware.BuildScopeWhere(user, "")
-
 	rows, err := a.db.Query(`
-		SELECT id, title, description, institution, department, team, status, created_at, updated_at
+		SELECT id, title, COALESCE(description, ''), COALESCE(required_skills_text, ''), COALESCE(required_education_level, ''),
+		       COALESCE(min_years_experience, 0), COALESCE(target_time_to_fill_days, 30), COALESCE(CAST(tags_json AS CHAR), '[]'),
+		       institution, department, team, status, created_at, updated_at
 		FROM positions
 		WHERE `+where+`
 		ORDER BY id DESC
@@ -69,54 +87,66 @@ func (a *API) ListPositions(c *gin.Context) {
 	}
 	defer rows.Close()
 
-	positions := make([]gin.H, 0)
+	out := make([]gin.H, 0)
 	for rows.Next() {
 		var (
-			id          int64
-			title       string
-			description sql.NullString
-			institution string
-			department  string
-			team        string
-			status      string
-			createdAt   time.Time
-			updatedAt   time.Time
+			id                 int64
+			title              string
+			description        string
+			requiredSkillsText string
+			requiredEducation  string
+			minYearsExp        float64
+			targetDays         int
+			tagsRaw            string
+			institution        string
+			department         string
+			team               string
+			status             string
+			createdAt          time.Time
+			updatedAt          time.Time
 		)
-		if err := rows.Scan(&id, &title, &description, &institution, &department, &team, &status, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&id, &title, &description, &requiredSkillsText, &requiredEducation, &minYearsExp, &targetDays, &tagsRaw,
+			&institution, &department, &team, &status, &createdAt, &updatedAt); err != nil {
 			writeError(c, http.StatusInternalServerError, "DB_ERROR", "failed to scan positions")
 			return
 		}
-		positions = append(positions, gin.H{
-			"id":          id,
-			"title":       title,
-			"description": description.String,
-			"institution": institution,
-			"department":  department,
-			"team":        team,
-			"status":      status,
-			"created_at":  createdAt.Format(time.RFC3339),
-			"updated_at":  updatedAt.Format(time.RFC3339),
+		tags := []string{}
+		_ = json.Unmarshal([]byte(tagsRaw), &tags)
+		out = append(out, gin.H{
+			"id":                       id,
+			"title":                    title,
+			"description":              description,
+			"required_skills":          service.ParseListCSV(requiredSkillsText),
+			"required_education_level": requiredEducation,
+			"min_years_experience":     minYearsExp,
+			"target_time_to_fill_days": targetDays,
+			"tags":                     tags,
+			"institution":              institution,
+			"department":               department,
+			"team":                     team,
+			"status":                   status,
+			"created_at":               createdAt.Format(time.RFC3339),
+			"updated_at":               updatedAt.Format(time.RFC3339),
 		})
 	}
 
-	writeSuccess(c, http.StatusOK, positions)
+	writeSuccess(c, http.StatusOK, out)
 }
 
 type candidateUpsertRequest struct {
-	FullName   string `json:"full_name" binding:"required,min=1,max=128"`
-	Phone      string `json:"phone" binding:"required,min=5,max=32"`
-	IDNumber   string `json:"id_number" binding:"required,min=3,max=64"`
-	Email      string `json:"email" binding:"omitempty,email,max=128"`
-	PositionID *int64 `json:"position_id" binding:"omitempty,gte=1"`
-	Status     string `json:"status" binding:"omitempty,oneof=new imported shortlisted rejected"`
-	ResumePath string `json:"resume_path" binding:"max=255"`
-}
-
-var allowedCandidateStatus = map[string]struct{}{
-	"new":         {},
-	"imported":    {},
-	"shortlisted": {},
-	"rejected":    {},
+	FullName        string            `json:"full_name" binding:"required,min=1,max=128"`
+	Phone           string            `json:"phone" binding:"required,min=5,max=32"`
+	IDNumber        string            `json:"id_number" binding:"required,min=3,max=64"`
+	Email           string            `json:"email" binding:"omitempty,email,max=128"`
+	PositionID      *int64            `json:"position_id" binding:"omitempty,gte=1"`
+	Status          string            `json:"status" binding:"omitempty,oneof=new imported shortlisted rejected"`
+	ResumePath      string            `json:"resume_path" binding:"max=255"`
+	Tags            []string          `json:"tags"`
+	CustomFields    map[string]string `json:"custom_fields"`
+	Skills          []string          `json:"skills"`
+	EducationLevel  string            `json:"education_level" binding:"omitempty,max=64"`
+	YearsExperience float64           `json:"years_experience" binding:"omitempty,gte=0,lte=60"`
+	LastActiveAt    string            `json:"last_active_at" binding:"omitempty,datetime=2006-01-02T15:04:05Z07:00"`
 }
 
 func (a *API) CreateCandidate(c *gin.Context) {
@@ -134,163 +164,85 @@ func (a *API) UpdateCandidate(c *gin.Context) {
 
 func (a *API) upsertCandidate(c *gin.Context, candidateID int64) {
 	user, _ := middleware.GetAuthUser(c)
-
 	var req candidateUpsertRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		badRequest(c, "INVALID_PAYLOAD", "invalid candidate payload")
 		return
 	}
 
-	if strings.TrimSpace(req.FullName) == "" || strings.TrimSpace(req.Phone) == "" || strings.TrimSpace(req.IDNumber) == "" {
-		badRequest(c, "MISSING_REQUIRED_FIELDS", "full_name, phone and id_number are required")
-		return
-	}
-
-	phoneEnc, err := a.cipher.Encrypt(strings.TrimSpace(req.Phone))
-	if err != nil {
-		writeError(c, http.StatusInternalServerError, "ENCRYPTION_ERROR", "failed to encrypt phone")
-		return
-	}
-	idEnc, err := a.cipher.Encrypt(strings.TrimSpace(req.IDNumber))
-	if err != nil {
-		writeError(c, http.StatusInternalServerError, "ENCRYPTION_ERROR", "failed to encrypt id number")
-		return
-	}
-
-	status := strings.TrimSpace(req.Status)
-	if status == "" {
-		status = "new"
-	}
-	if _, ok := allowedCandidateStatus[status]; !ok {
-		badRequest(c, "INVALID_STATUS", "status must be one of: new, imported, shortlisted, rejected")
-		return
-	}
-
-	if candidateID == 0 {
-		res, err := a.db.Exec(`
-			INSERT INTO candidates
-			(full_name, phone_enc, id_number_enc, email, resume_path, position_id, institution, department, team, status, created_by)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, strings.TrimSpace(req.FullName), phoneEnc, idEnc, strPtr(strings.TrimSpace(req.Email)), strPtr(strings.TrimSpace(req.ResumePath)), req.PositionID,
-			user.Institution, user.Department, user.Team, status, user.ID)
+	var lastActive *time.Time
+	if strings.TrimSpace(req.LastActiveAt) != "" {
+		parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(req.LastActiveAt))
 		if err != nil {
-			writeError(c, http.StatusInternalServerError, "DB_ERROR", "failed to create candidate")
+			badRequest(c, "INVALID_LAST_ACTIVE_AT", "last_active_at must be RFC3339")
 			return
 		}
-		newID, _ := res.LastInsertId()
-		a.logAudit(c, user.ID, "recruitment.candidate.create", "candidates", strconv.FormatInt(newID, 10), gin.H{"full_name": req.FullName})
-		writeSuccess(c, http.StatusCreated, gin.H{"id": newID})
-		return
+		lastActive = &parsed
 	}
 
-	where, scopeArgs := middleware.BuildScopeWhere(user, "")
-	args := []any{candidateID}
-	args = append(args, scopeArgs...)
-	var exists int
-	if err := a.db.QueryRow("SELECT COUNT(1) FROM candidates WHERE id = ? AND "+where, args...).Scan(&exists); err != nil {
-		writeError(c, http.StatusInternalServerError, "DB_ERROR", "failed to validate candidate")
-		return
-	}
-	if exists == 0 {
-		writeError(c, http.StatusNotFound, "NOT_FOUND", "candidate not found in your scope")
-		return
+	before := map[string]any(nil)
+	if candidateID > 0 {
+		current, err := a.recruitSvc.LoadCandidate(c.Request.Context(), candidateID)
+		if err != nil {
+			writeError(c, http.StatusNotFound, "NOT_FOUND", "candidate not found")
+			return
+		}
+		if !isInScope(user, current.Institution, current.Department, current.Team) {
+			writeError(c, http.StatusForbidden, "FORBIDDEN", "candidate is outside your data scope")
+			return
+		}
+		before = candidateToResponse(current)
 	}
 
-	_, err = a.db.Exec(`
-		UPDATE candidates
-		SET full_name = ?, phone_enc = ?, id_number_enc = ?, email = ?, resume_path = ?, position_id = ?, status = ?
-		WHERE id = ?
-	`, strings.TrimSpace(req.FullName), phoneEnc, idEnc, strPtr(strings.TrimSpace(req.Email)), strPtr(strings.TrimSpace(req.ResumePath)), req.PositionID, status, candidateID)
+	result, err := a.recruitSvc.UpsertCandidate(c.Request.Context(), user, service.CandidateUpsertInput{
+		ID:              candidateID,
+		FullName:        req.FullName,
+		Phone:           req.Phone,
+		IDNumber:        req.IDNumber,
+		Email:           req.Email,
+		ResumePath:      req.ResumePath,
+		PositionID:      req.PositionID,
+		Status:          req.Status,
+		Tags:            req.Tags,
+		CustomFields:    req.CustomFields,
+		Skills:          req.Skills,
+		EducationLevel:  req.EducationLevel,
+		YearsExperience: req.YearsExperience,
+		LastActiveAt:    lastActive,
+	})
 	if err != nil {
-		writeError(c, http.StatusInternalServerError, "DB_ERROR", "failed to update candidate")
+		badRequest(c, "INVALID_CANDIDATE", err.Error())
 		return
 	}
 
-	a.logAudit(c, user.ID, "recruitment.candidate.update", "candidates", strconv.FormatInt(candidateID, 10), gin.H{"full_name": req.FullName})
-	writeSuccess(c, http.StatusOK, gin.H{"id": candidateID})
+	action := "recruitment.candidate.create"
+	statusCode := http.StatusCreated
+	if candidateID > 0 || result.WasMerged {
+		action = "recruitment.candidate.update"
+		statusCode = http.StatusOK
+	}
+	after := candidateToResponse(result.Model)
+	details := gin.H{"was_merged": result.WasMerged}
+	if result.MergedFrom != nil {
+		details["merged_from_id"] = *result.MergedFrom
+	}
+
+	a.logAuditDetailed(c, user.ID, "recruitment", "INFO", action, "candidates", strconv.FormatInt(result.Model.ID, 10), before, after, details)
+	writeSuccess(c, statusCode, gin.H{"id": result.Model.ID, "was_merged": result.WasMerged})
 }
 
 func (a *API) ListCandidates(c *gin.Context) {
 	user, _ := middleware.GetAuthUser(c)
-	where, args := middleware.BuildScopeWhere(user, "c")
-
-	rows, err := a.db.Query(`
-		SELECT c.id, c.full_name, c.phone_enc, c.id_number_enc, c.email, c.resume_path, c.position_id, c.status,
-		       c.institution, c.department, c.team, c.created_at, c.updated_at, COALESCE(p.title, '')
-		FROM candidates c
-		LEFT JOIN positions p ON p.id = c.position_id
-		WHERE `+where+`
-		ORDER BY c.id DESC
-	`, args...)
+	items, err := a.recruitSvc.ListCandidates(c.Request.Context(), user)
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "DB_ERROR", "failed to list candidates")
 		return
 	}
-	defer rows.Close()
-
-	candidates := make([]gin.H, 0)
-	for rows.Next() {
-		candidate, err := a.scanCandidateRow(rows)
-		if err != nil {
-			writeError(c, http.StatusInternalServerError, "DECRYPT_ERROR", "failed to decode candidate")
-			return
-		}
-		candidates = append(candidates, candidate)
+	out := make([]gin.H, 0, len(items))
+	for _, item := range items {
+		out = append(out, candidateToResponse(item))
 	}
-
-	writeSuccess(c, http.StatusOK, candidates)
-}
-
-func (a *API) scanCandidateRow(scanner interface{ Scan(dest ...any) error }) (gin.H, error) {
-	var (
-		id          int64
-		fullName    string
-		phoneEnc    string
-		idEnc       string
-		email       sql.NullString
-		resumePath  sql.NullString
-		positionID  sql.NullInt64
-		status      string
-		institution string
-		department  string
-		team        string
-		createdAt   time.Time
-		updatedAt   time.Time
-		position    string
-	)
-	if err := scanner.Scan(&id, &fullName, &phoneEnc, &idEnc, &email, &resumePath, &positionID, &status, &institution, &department, &team, &createdAt, &updatedAt, &position); err != nil {
-		return nil, err
-	}
-
-	phoneRaw, err := a.cipher.Decrypt(phoneEnc)
-	if err != nil {
-		return nil, err
-	}
-	idRaw, err := a.cipher.Decrypt(idEnc)
-	if err != nil {
-		return nil, err
-	}
-
-	out := gin.H{
-		"id":             id,
-		"full_name":      fullName,
-		"phone":          security.MaskPhone(phoneRaw),
-		"id_number":      security.MaskID(idRaw),
-		"email":          email.String,
-		"resume_path":    resumePath.String,
-		"position_id":    positionID.Int64,
-		"position_title": position,
-		"status":         status,
-		"institution":    institution,
-		"department":     department,
-		"team":           team,
-		"created_at":     createdAt.Format(time.RFC3339),
-		"updated_at":     updatedAt.Format(time.RFC3339),
-	}
-	if !positionID.Valid {
-		out["position_id"] = nil
-	}
-	return out, nil
+	writeSuccess(c, http.StatusOK, out)
 }
 
 type candidateMergeRequest struct {
@@ -305,220 +257,108 @@ func (a *API) MergeCandidates(c *gin.Context) {
 		badRequest(c, "INVALID_PAYLOAD", "invalid merge payload")
 		return
 	}
-	if req.PrimaryCandidateID <= 0 || len(req.DuplicateIDs) == 0 {
-		badRequest(c, "INVALID_MERGE_REQUEST", "primary_candidate_id and duplicate_ids are required")
+	merged, err := a.recruitSvc.MergeDuplicates(c.Request.Context(), user, req.PrimaryCandidateID, req.DuplicateIDs)
+	if err != nil {
+		writeError(c, http.StatusBadRequest, "MERGE_FAILED", err.Error())
 		return
 	}
 
-	primary, err := a.loadCandidateRaw(req.PrimaryCandidateID)
-	if err != nil {
-		writeError(c, http.StatusNotFound, "PRIMARY_NOT_FOUND", "primary candidate not found")
-		return
-	}
-	if !a.isInScope(user, primary.Institution, primary.Department, primary.Team) {
-		writeError(c, http.StatusForbidden, "FORBIDDEN", "candidate is outside your data scope")
-		return
-	}
-
-	merged := make([]int64, 0)
-	for _, duplicateID := range req.DuplicateIDs {
-		dup, err := a.loadCandidateRaw(duplicateID)
-		if err != nil {
-			continue
-		}
-		if !a.isInScope(user, dup.Institution, dup.Department, dup.Team) {
-			continue
-		}
-		if duplicateID == req.PrimaryCandidateID {
-			continue
-		}
-		if dup.PhoneRaw != primary.PhoneRaw && dup.IDRaw != primary.IDRaw {
-			continue
-		}
-		_, _ = a.db.Exec(`UPDATE attachments SET record_id = ? WHERE module_name = 'candidates' AND record_id = ?`, req.PrimaryCandidateID, duplicateID)
-		_, _ = a.db.Exec(`DELETE FROM candidates WHERE id = ?`, duplicateID)
-		merged = append(merged, duplicateID)
-	}
-
-	a.logAudit(c, user.ID, "recruitment.candidate.merge", "candidates", strconv.FormatInt(req.PrimaryCandidateID, 10), gin.H{
-		"merged_ids": merged,
-	})
-
-	writeSuccess(c, http.StatusOK, gin.H{
-		"primary_candidate_id": req.PrimaryCandidateID,
-		"merged_ids":           merged,
-	})
-}
-
-type candidateRaw struct {
-	ID          int64
-	FullName    string
-	PhoneRaw    string
-	IDRaw       string
-	Institution string
-	Department  string
-	Team        string
-}
-
-func (a *API) loadCandidateRaw(id int64) (candidateRaw, error) {
-	var (
-		cand     candidateRaw
-		phoneEnc string
-		idEnc    string
-	)
-	err := a.db.QueryRow(`
-		SELECT id, full_name, phone_enc, id_number_enc, institution, department, team
-		FROM candidates WHERE id = ?
-	`, id).Scan(&cand.ID, &cand.FullName, &phoneEnc, &idEnc, &cand.Institution, &cand.Department, &cand.Team)
-	if err != nil {
-		return candidateRaw{}, err
-	}
-	cand.PhoneRaw, err = a.cipher.Decrypt(phoneEnc)
-	if err != nil {
-		return candidateRaw{}, err
-	}
-	cand.IDRaw, err = a.cipher.Decrypt(idEnc)
-	if err != nil {
-		return candidateRaw{}, err
-	}
-	return cand, nil
-}
-
-func (a *API) isInScope(user middleware.AuthUser, institution, department, team string) bool {
-	if user.Role == "system_admin" {
-		return true
-	}
-	return user.Institution == institution && user.Department == department && user.Team == team
-}
-
-type smartSearchResult struct {
-	CandidateID int64    `json:"candidate_id"`
-	FullName    string   `json:"full_name"`
-	MaskedPhone string   `json:"masked_phone"`
-	MaskedID    string   `json:"masked_id"`
-	Score       int      `json:"score"`
-	Explanation []string `json:"explanation"`
-	Institution string   `json:"institution"`
-	Department  string   `json:"department"`
-	Team        string   `json:"team"`
+	a.logAuditDetailed(c, user.ID, "recruitment", "INFO", "recruitment.candidate.merge", "candidates", strconv.FormatInt(req.PrimaryCandidateID, 10), nil, gin.H{"merged_ids": merged}, gin.H{"merged_ids": merged})
+	writeSuccess(c, http.StatusOK, gin.H{"primary_candidate_id": req.PrimaryCandidateID, "merged_ids": merged})
 }
 
 func (a *API) SmartSearchCandidates(c *gin.Context) {
-	var req struct {
-		Query string `form:"q" binding:"required,min=1,max=128"`
-	}
-	if err := c.ShouldBindQuery(&req); err != nil {
-		badRequest(c, "QUERY_REQUIRED", "q is required")
-		return
-	}
-
-	query := strings.TrimSpace(strings.ToLower(req.Query))
+	query := strings.TrimSpace(c.Query("q"))
 	if query == "" {
 		badRequest(c, "QUERY_REQUIRED", "q is required")
 		return
 	}
-
 	user, _ := middleware.GetAuthUser(c)
-	where, args := middleware.BuildScopeWhere(user, "")
-	rows, err := a.db.Query(`
-		SELECT id, full_name, phone_enc, id_number_enc, COALESCE(email, ''), institution, department, team
-		FROM candidates
-		WHERE `+where+`
-	`, args...)
+	results, err := a.recruitSvc.SmartSearch(c.Request.Context(), user, query)
 	if err != nil {
-		writeError(c, http.StatusInternalServerError, "DB_ERROR", "failed to query candidates")
+		writeError(c, http.StatusInternalServerError, "DB_ERROR", "failed to search candidates")
 		return
 	}
-	defer rows.Close()
-
-	tokens := strings.Fields(query)
-	results := make([]smartSearchResult, 0)
-	for rows.Next() {
-		var (
-			id          int64
-			fullName    string
-			phoneEnc    string
-			idEnc       string
-			email       string
-			institution string
-			department  string
-			team        string
-		)
-		if err := rows.Scan(&id, &fullName, &phoneEnc, &idEnc, &email, &institution, &department, &team); err != nil {
-			writeError(c, http.StatusInternalServerError, "DB_ERROR", "failed to scan candidate")
-			return
-		}
-
-		phoneRaw, err := a.cipher.Decrypt(phoneEnc)
-		if err != nil {
-			continue
-		}
-		idRaw, err := a.cipher.Decrypt(idEnc)
-		if err != nil {
-			continue
-		}
-
-		score, explanation := ScoreCandidate(tokens, fullName, email, phoneRaw, idRaw)
-		if score == 0 {
-			continue
-		}
-		results = append(results, smartSearchResult{
-			CandidateID: id,
-			FullName:    fullName,
-			MaskedPhone: security.MaskPhone(phoneRaw),
-			MaskedID:    security.MaskID(idRaw),
-			Score:       score,
-			Explanation: explanation,
-			Institution: institution,
-			Department:  department,
-			Team:        team,
+	out := make([]gin.H, 0, len(results))
+	for _, item := range results {
+		out = append(out, gin.H{
+			"candidate_id": item.CandidateID,
+			"full_name":    item.FullName,
+			"masked_phone": item.MaskedPhone,
+			"masked_id":    item.MaskedID,
+			"score":        item.Score,
+			"explanation":  item.Reasons,
+			"institution":  item.Institution,
+			"department":   item.Department,
+			"team":         item.Team,
 		})
 	}
-
-	sort.Slice(results, func(i, j int) bool {
-		if results[i].Score == results[j].Score {
-			return results[i].CandidateID > results[j].CandidateID
-		}
-		return results[i].Score > results[j].Score
-	})
-
-	writeSuccess(c, http.StatusOK, results)
+	writeSuccess(c, http.StatusOK, out)
 }
 
-func ScoreCandidate(tokens []string, fullName, email, phone, idNumber string) (int, []string) {
-	score := 0
-	explanation := make([]string, 0)
-	nameLower := strings.ToLower(fullName)
-	emailLower := strings.ToLower(email)
+func (a *API) CandidateMatchScore(c *gin.Context) {
+	candidateID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || candidateID <= 0 {
+		badRequest(c, "INVALID_ID", "invalid candidate id")
+		return
+	}
+	positionID, err := strconv.ParseInt(c.Query("position_id"), 10, 64)
+	if err != nil || positionID <= 0 {
+		badRequest(c, "INVALID_POSITION_ID", "position_id query param is required")
+		return
+	}
+	user, _ := middleware.GetAuthUser(c)
+	result, err := a.recruitSvc.ExplainableMatch(c.Request.Context(), user, candidateID, positionID)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "outside your data scope") {
+			writeError(c, http.StatusForbidden, "FORBIDDEN", err.Error())
+			return
+		}
+		writeError(c, http.StatusBadRequest, "MATCH_SCORE_FAILED", err.Error())
+		return
+	}
+	writeSuccess(c, http.StatusOK, result)
+}
 
-	for _, t := range tokens {
-		if strings.Contains(nameLower, t) {
-			score += 35
-			explanation = append(explanation, fmt.Sprintf("name matched '%s'", t))
-		}
-		if emailLower != "" && strings.Contains(emailLower, t) {
-			score += 15
-			explanation = append(explanation, fmt.Sprintf("email matched '%s'", t))
-		}
-		if strings.Contains(strings.ToLower(phone), t) {
-			score += 25
-			explanation = append(explanation, fmt.Sprintf("phone matched '%s'", t))
-		}
-		if strings.Contains(strings.ToLower(idNumber), t) {
-			score += 30
-			explanation = append(explanation, fmt.Sprintf("id_number matched '%s'", t))
-		}
+func (a *API) CandidateRecommendations(c *gin.Context) {
+	user, _ := middleware.GetAuthUser(c)
+	candidateID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || candidateID <= 0 {
+		badRequest(c, "INVALID_ID", "invalid candidate id")
+		return
+	}
+	limit, _ := strconv.Atoi(strings.TrimSpace(c.Query("limit")))
+	if limit <= 0 {
+		limit = 5
 	}
 
-	if score > 100 {
-		score = 100
+	similarCandidates, err := a.recruitSvc.SimilarCandidates(c.Request.Context(), user, candidateID, limit)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "outside your data scope") {
+			writeError(c, http.StatusForbidden, "FORBIDDEN", err.Error())
+			return
+		}
+		writeError(c, http.StatusInternalServerError, "RECOMMENDATION_FAILED", err.Error())
+		return
 	}
-	return score, explanation
+	similarPositions, err := a.recruitSvc.SimilarPositions(c.Request.Context(), user, candidateID, limit)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "outside your data scope") {
+			writeError(c, http.StatusForbidden, "FORBIDDEN", err.Error())
+			return
+		}
+		writeError(c, http.StatusInternalServerError, "RECOMMENDATION_FAILED", err.Error())
+		return
+	}
+
+	writeSuccess(c, http.StatusOK, gin.H{
+		"similar_candidates": similarCandidates,
+		"similar_positions":  similarPositions,
+	})
 }
 
 func (a *API) ImportCandidates(c *gin.Context) {
 	user, _ := middleware.GetAuthUser(c)
-
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
 		badRequest(c, "FILE_REQUIRED", "file is required")
@@ -538,25 +378,13 @@ func (a *API) ImportCandidates(c *gin.Context) {
 		return
 	}
 
-	imported := 0
-	failed := make([]gin.H, 0)
-	for i, row := range rows {
-		fullName := strings.TrimSpace(row["full_name"])
-		phone := strings.TrimSpace(row["phone"])
-		idNumber := strings.TrimSpace(row["id_number"])
-		email := strings.TrimSpace(row["email"])
-		if fullName == "" || phone == "" || idNumber == "" {
-			failed = append(failed, gin.H{"row": i + 2, "reason": "missing full_name/phone/id_number"})
-			continue
-		}
-		if err := a.insertImportedCandidate(user, fullName, phone, idNumber, email); err != nil {
-			failed = append(failed, gin.H{"row": i + 2, "reason": err.Error()})
-			continue
-		}
-		imported++
+	imported, failed, err := a.recruitSvc.ImportCandidateRows(c.Request.Context(), user, rows)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "IMPORT_FAILED", err.Error())
+		return
 	}
 
-	a.logAudit(c, user.ID, "recruitment.candidate.import", "candidates", "bulk", gin.H{
+	a.logAuditDetailed(c, user.ID, "recruitment", "INFO", "recruitment.candidate.import", "candidates", "bulk", nil, gin.H{"imported": imported, "failed": len(failed)}, gin.H{
 		"file":     fileHeader.Filename,
 		"imported": imported,
 		"failed":   len(failed),
@@ -567,27 +395,6 @@ func (a *API) ImportCandidates(c *gin.Context) {
 		"imported":   imported,
 		"failed":     failed,
 	})
-}
-
-func (a *API) insertImportedCandidate(user middleware.AuthUser, fullName, phone, idNumber, email string) error {
-	phoneEnc, err := a.cipher.Encrypt(phone)
-	if err != nil {
-		return fmt.Errorf("encrypt phone")
-	}
-	idEnc, err := a.cipher.Encrypt(idNumber)
-	if err != nil {
-		return fmt.Errorf("encrypt id")
-	}
-
-	_, err = a.db.Exec(`
-		INSERT INTO candidates
-		(full_name, phone_enc, id_number_enc, email, institution, department, team, status, created_by)
-		VALUES (?, ?, ?, ?, ?, ?, ?, 'imported', ?)
-	`, fullName, phoneEnc, idEnc, strPtr(email), user.Institution, user.Department, user.Team, user.ID)
-	if err != nil {
-		return fmt.Errorf("unable to save candidate row")
-	}
-	return nil
 }
 
 func parseCandidateImportRows(file multipart.File, fileHeader *multipart.FileHeader) ([]map[string]string, error) {
@@ -688,4 +495,45 @@ func normalizeHeaders(headers []string) []string {
 		out[i] = n
 	}
 	return out
+}
+
+func candidateToResponse(item service.CandidateModel) gin.H {
+	lastActive := ""
+	if !item.LastActiveAt.IsZero() {
+		lastActive = item.LastActiveAt.UTC().Format(time.RFC3339)
+	}
+
+	resp := gin.H{
+		"id":               item.ID,
+		"full_name":        item.FullName,
+		"phone":            security.MaskPhone(item.Phone),
+		"id_number":        security.MaskID(item.IDNumber),
+		"email":            item.Email,
+		"resume_path":      item.ResumePath,
+		"position_id":      nil,
+		"position_title":   item.PositionTitle,
+		"status":           item.Status,
+		"tags":             item.Tags,
+		"custom_fields":    item.CustomFields,
+		"skills":           item.Skills,
+		"education_level":  item.EducationLevel,
+		"years_experience": item.YearsExperience,
+		"last_active_at":   lastActive,
+		"institution":      item.Institution,
+		"department":       item.Department,
+		"team":             item.Team,
+		"created_at":       item.CreatedAt.Format(time.RFC3339),
+		"updated_at":       item.UpdatedAt.Format(time.RFC3339),
+	}
+	if item.PositionID != nil {
+		resp["position_id"] = *item.PositionID
+	}
+	return resp
+}
+
+func isInScope(user middleware.AuthUser, institution, department, team string) bool {
+	if user.Role == "system_admin" {
+		return true
+	}
+	return user.Institution == institution && user.Department == department && user.Team == team
 }

@@ -69,7 +69,11 @@ func (a *API) CreateCase(c *gin.Context) {
 	}
 	id, _ := res.LastInsertId()
 
-	a.logAudit(c, user.ID, "cases.create", "case_ledgers", strconv.FormatInt(id, 10), gin.H{"case_no": caseNo, "subject": subject})
+	_, _ = a.caseSvc.RecordHistory(c.Request.Context(), user, id, "create", nil, strRef("new"), strRef("case created"), nil, map[string]any{
+		"case_no": caseNo,
+		"subject": subject,
+	})
+	a.logAuditDetailed(c, user.ID, "cases", "INFO", "cases.create", "case_ledgers", strconv.FormatInt(id, 10), nil, gin.H{"case_no": caseNo, "subject": subject}, gin.H{"case_no": caseNo, "subject": subject})
 	writeSuccess(c, http.StatusCreated, gin.H{"id": id, "case_no": caseNo})
 }
 
@@ -211,13 +215,20 @@ func (a *API) AssignCase(c *gin.Context) {
 	where, scopeArgs := middleware.BuildScopeWhere(user, "")
 	args := []any{id}
 	args = append(args, scopeArgs...)
-	var exists int
+	var (
+		exists        int
+		currentStatus string
+	)
 	if err := a.db.QueryRow("SELECT COUNT(1) FROM case_ledgers WHERE id = ? AND "+where, args...).Scan(&exists); err != nil {
 		writeError(c, http.StatusInternalServerError, "DB_ERROR", "failed to validate case")
 		return
 	}
 	if exists == 0 {
 		writeError(c, http.StatusNotFound, "NOT_FOUND", "case not found in your scope")
+		return
+	}
+	if err := a.db.QueryRow("SELECT status FROM case_ledgers WHERE id = ?", id).Scan(&currentStatus); err != nil {
+		writeError(c, http.StatusInternalServerError, "DB_ERROR", "failed to read case status")
 		return
 	}
 
@@ -231,7 +242,8 @@ func (a *API) AssignCase(c *gin.Context) {
 		return
 	}
 
-	a.logAudit(c, user.ID, "cases.assign", "case_ledgers", strconv.FormatInt(id, 10), req)
+	_, _ = a.caseSvc.RecordHistory(c.Request.Context(), user, id, "assign", strRef(currentStatus), strRef("assigned"), strRef("case assigned"), int64Ref(req.AssignedTo), map[string]any{"assigned_to": req.AssignedTo})
+	a.logAuditDetailed(c, user.ID, "cases", "INFO", "cases.assign", "case_ledgers", strconv.FormatInt(id, 10), gin.H{"status": currentStatus}, gin.H{"status": "assigned", "assigned_to": req.AssignedTo}, req)
 	writeSuccess(c, http.StatusOK, gin.H{"id": id, "assigned_to": req.AssignedTo})
 }
 
@@ -304,7 +316,8 @@ func (a *API) UpdateCaseStatus(c *gin.Context) {
 		return
 	}
 
-	a.logAudit(c, user.ID, "cases.status.update", "case_ledgers", strconv.FormatInt(id, 10), gin.H{"from": currentStatus, "to": newStatus})
+	_, _ = a.caseSvc.RecordHistory(c.Request.Context(), user, id, "status_change", strRef(currentStatus), strRef(newStatus), strRef("status transition"), nil, map[string]any{"from": currentStatus, "to": newStatus})
+	a.logAuditDetailed(c, user.ID, "cases", "INFO", "cases.status.update", "case_ledgers", strconv.FormatInt(id, 10), gin.H{"status": currentStatus}, gin.H{"status": newStatus}, gin.H{"from": currentStatus, "to": newStatus})
 	writeSuccess(c, http.StatusOK, gin.H{"id": id, "status": newStatus})
 }
 
@@ -368,4 +381,51 @@ func (a *API) ListCaseAttachments(c *gin.Context) {
 	}
 
 	writeSuccess(c, http.StatusOK, items)
+}
+
+func (a *API) ListCaseHistory(c *gin.Context) {
+	user, _ := middleware.GetAuthUser(c)
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		badRequest(c, "INVALID_ID", "invalid case id")
+		return
+	}
+
+	history, err := a.caseSvc.ListHistory(c.Request.Context(), user, id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			writeError(c, http.StatusNotFound, "NOT_FOUND", "case not found in your scope")
+			return
+		}
+		writeError(c, http.StatusInternalServerError, "DB_ERROR", "failed to list case history")
+		return
+	}
+
+	out := make([]gin.H, 0, len(history))
+	for _, item := range history {
+		entry := gin.H{
+			"id":          item.ID,
+			"case_id":     item.CaseID,
+			"action_type": item.ActionType,
+			"from_status": item.FromStatus,
+			"to_status":   item.ToStatus,
+			"note":        item.Note,
+			"assigned_to": item.AssignedTo,
+			"details":     item.Details,
+			"changed_by":  item.ChangedBy,
+			"created_at":  item.CreatedAt.Format(time.RFC3339),
+		}
+		out = append(out, entry)
+	}
+	writeSuccess(c, http.StatusOK, out)
+}
+
+func strRef(v string) *string {
+	vv := v
+	return &vv
+}
+
+func int64Ref(v int64) *int64 {
+	vv := v
+	return &vv
 }

@@ -120,7 +120,7 @@ func (a *API) UploadChunk(c *gin.Context) {
 		writeError(c, http.StatusConflict, "UPLOAD_NOT_ACTIVE", "upload session is not active")
 		return
 	}
-	if session.UploadedBy != user.ID && user.Role != "system_admin" {
+	if session.UploadedBy != user.ID {
 		writeError(c, http.StatusForbidden, "FORBIDDEN", "upload session is outside your ownership")
 		return
 	}
@@ -221,7 +221,7 @@ func (a *API) CompleteUpload(c *gin.Context) {
 		writeError(c, http.StatusConflict, "UPLOAD_NOT_ACTIVE", "upload session is not active")
 		return
 	}
-	if session.UploadedBy != user.ID && user.Role != "system_admin" {
+	if session.UploadedBy != user.ID {
 		writeError(c, http.StatusForbidden, "FORBIDDEN", "upload session is outside your ownership")
 		return
 	}
@@ -339,7 +339,7 @@ func (a *API) GetUploadSession(c *gin.Context) {
 		writeError(c, http.StatusNotFound, "UPLOAD_SESSION_NOT_FOUND", "upload session not found")
 		return
 	}
-	if session.UploadedBy != user.ID && user.Role != "system_admin" {
+	if session.UploadedBy != user.ID {
 		writeError(c, http.StatusForbidden, "FORBIDDEN", "upload session is outside your ownership")
 		return
 	}

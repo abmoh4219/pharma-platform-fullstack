@@ -1,15 +1,15 @@
 <script setup>
-import { reactive, ref } from 'vue'
-import { LockKeyhole, User } from 'lucide-vue-next'
+import { reactive, ref } from "vue"
+import { LockKeyhole, User } from "lucide-vue-next"
 
-import Button from '@/components/ui/button/Button.vue'
-import Input from '@/components/ui/input/Input.vue'
+import Button from "@/components/ui/button/Button.vue"
+import Input from "@/components/ui/input/Input.vue"
 
-const emit = defineEmits(['submit'])
+const emit = defineEmits(["submit"])
 
 const form = reactive({
-  username: 'admin',
-  password: 'Admin123!',
+  username: "",
+  password: "",
 })
 
 const submitting = ref(false)
@@ -18,7 +18,7 @@ async function handleSubmit() {
   if (submitting.value) return
   submitting.value = true
   try {
-    await emit('submit', { ...form })
+    await emit("submit", { ...form })
   } finally {
     submitting.value = false
   }

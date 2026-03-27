@@ -24,13 +24,9 @@ docker compose down && docker compose up --build
 - API base: http://localhost:8080/api/v1
 - Health: http://localhost:8080/api/v1/health
 
-## Test Login
-- Username: `admin`
-- Password: `Admin123!`
-
 ## Quick Verification
 1. **Login**
-   - Open frontend and sign in with admin credentials.
+   - Open frontend and sign in with a provisioned user account.
 2. **Dashboard**
    - Confirm role/scope and summary counters load.
 3. **Recruitment**

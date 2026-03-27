@@ -2,10 +2,10 @@ package app
 
 import (
 	"fmt"
-	"log"
 
 	"pharma-platform/internal/config"
 	"pharma-platform/internal/database"
+	"pharma-platform/internal/logging"
 	"pharma-platform/internal/router"
 )
 
@@ -28,6 +28,6 @@ func Run() error {
 	r := router.New(cfg, db)
 	addr := fmt.Sprintf(":%d", cfg.AppPort)
 
-	log.Printf("backend listening on %s", addr)
+	logging.Info("app", "backend listening", map[string]any{"addr": addr})
 	return r.Run(addr)
 }

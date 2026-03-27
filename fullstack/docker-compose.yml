@@ -4,21 +4,22 @@ services:
     container_name: pharma_mysql
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_ROOT_PASSWORD: pharma_root_2026_A7f9K2m!
       MYSQL_DATABASE: pharma_platform
       MYSQL_USER: pharma_user
-      MYSQL_PASSWORD: pharma_pass
+      MYSQL_PASSWORD: pharma_db_2026_X9p4L8w!
     command:
       - --default-authentication-plugin=mysql_native_password
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
+      - --log-bin-trust-function-creators=1
     ports:
       - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
       - ./backend/migrations/init.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-prootpassword"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-ppharma_root_2026_A7f9K2m!"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -37,10 +38,10 @@ services:
       DB_PORT: 3306
       DB_NAME: pharma_platform
       DB_USER: pharma_user
-      DB_PASSWORD: pharma_pass
-      JWT_SECRET: change_me_for_dev_only
+      DB_PASSWORD: pharma_db_2026_X9p4L8w!
+      JWT_SECRET: pharma_platform_jwt_secret_2026_x3G8mQ7tN1vR2kL9
       JWT_EXP_HOURS: 8
-      APP_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef
+      APP_ENCRYPTION_KEY: pharma_platform_enc_key_2026_7vK4mN9q
       UPLOAD_DIR: /app/storage/uploads
       UPLOAD_TMP_DIR: /app/storage/tmp
       MAX_UPLOAD_MB: 20

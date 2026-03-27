@@ -1,8 +1,8 @@
 package handler
 
 import (
+	"context"
 	"database/sql"
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,6 +12,7 @@ import (
 
 	"pharma-platform/internal/middleware"
 	"pharma-platform/internal/security"
+	"pharma-platform/internal/service"
 )
 
 type qualificationRequest struct {
@@ -31,6 +32,7 @@ func (a *API) CreateQualification(c *gin.Context) {
 		badRequest(c, "INVALID_PAYLOAD", "invalid qualification payload")
 		return
 	}
+
 	issueDate, err := parseDate(req.IssueDate)
 	if err != nil {
 		badRequest(c, "INVALID_ISSUE_DATE", "issue_date must be YYYY-MM-DD")
@@ -68,7 +70,8 @@ func (a *API) CreateQualification(c *gin.Context) {
 		return
 	}
 	id, _ := res.LastInsertId()
-	a.logAudit(c, user.ID, "compliance.qualification.create", "qualifications", strconv.FormatInt(id, 10), req)
+	after, _ := a.loadQualificationForAudit(c.Request.Context(), id)
+	a.logAuditDetailed(c, user.ID, "compliance", "INFO", "compliance.qualification.create", "qualifications", strconv.FormatInt(id, 10), nil, after, req)
 	writeSuccess(c, http.StatusCreated, gin.H{"id": id})
 }
 
@@ -160,13 +163,10 @@ func (a *API) UpdateQualification(c *gin.Context) {
 		badRequest(c, "INVALID_ID", "invalid qualification id")
 		return
 	}
+
 	var req qualificationRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		badRequest(c, "INVALID_PAYLOAD", "invalid qualification payload")
-		return
-	}
-	if req.EntityType != "client" && req.EntityType != "supplier" {
-		badRequest(c, "INVALID_ENTITY_TYPE", "entity_type must be client or supplier")
 		return
 	}
 
@@ -180,15 +180,9 @@ func (a *API) UpdateQualification(c *gin.Context) {
 		badRequest(c, "INVALID_EXPIRY_DATE", "expiry_date must be YYYY-MM-DD")
 		return
 	}
-	notesEnc, err := a.cipher.Encrypt(strings.TrimSpace(req.Notes))
-	if err != nil {
-		writeError(c, http.StatusInternalServerError, "ENCRYPTION_ERROR", "failed to encrypt notes")
+	if expiryDate.Before(issueDate) {
+		badRequest(c, "INVALID_DATE_RANGE", "expiry_date must be greater than or equal to issue_date")
 		return
-	}
-
-	status := strings.TrimSpace(req.Status)
-	if status == "" {
-		status = "active"
 	}
 
 	where, scopeArgs := middleware.BuildScopeWhere(user, "")
@@ -204,6 +198,18 @@ func (a *API) UpdateQualification(c *gin.Context) {
 		return
 	}
 
+	before, _ := a.loadQualificationForAudit(c.Request.Context(), id)
+
+	notesEnc, err := a.cipher.Encrypt(strings.TrimSpace(req.Notes))
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "ENCRYPTION_ERROR", "failed to encrypt notes")
+		return
+	}
+	status := strings.TrimSpace(req.Status)
+	if status == "" {
+		status = "active"
+	}
+
 	_, err = a.db.Exec(`
 		UPDATE qualifications
 		SET entity_type = ?, entity_name = ?, qualification_code = ?, issue_date = ?, expiry_date = ?, status = ?, notes_enc = ?
@@ -214,7 +220,8 @@ func (a *API) UpdateQualification(c *gin.Context) {
 		return
 	}
 
-	a.logAudit(c, user.ID, "compliance.qualification.update", "qualifications", strconv.FormatInt(id, 10), req)
+	after, _ := a.loadQualificationForAudit(c.Request.Context(), id)
+	a.logAuditDetailed(c, user.ID, "compliance", "INFO", "compliance.qualification.update", "qualifications", strconv.FormatInt(id, 10), before, after, req)
 	writeSuccess(c, http.StatusOK, gin.H{"id": id})
 }
 
@@ -225,6 +232,8 @@ func (a *API) DeleteQualification(c *gin.Context) {
 		badRequest(c, "INVALID_ID", "invalid qualification id")
 		return
 	}
+
+	before, _ := a.loadQualificationForAudit(c.Request.Context(), id)
 	where, scopeArgs := middleware.BuildScopeWhere(user, "")
 	args := []any{id}
 	args = append(args, scopeArgs...)
@@ -239,16 +248,32 @@ func (a *API) DeleteQualification(c *gin.Context) {
 		return
 	}
 
-	a.logAudit(c, user.ID, "compliance.qualification.delete", "qualifications", strconv.FormatInt(id, 10), gin.H{})
+	a.logAuditDetailed(c, user.ID, "compliance", "WARN", "compliance.qualification.delete", "qualifications", strconv.FormatInt(id, 10), before, nil, gin.H{"deleted": true})
 	writeSuccess(c, http.StatusOK, gin.H{"deleted": true})
 }
 
 type restrictionRequest struct {
-	MedName          string  `json:"med_name" binding:"required,min=1,max=128"`
-	RuleType         string  `json:"rule_type" binding:"required,min=1,max=64"`
-	MaxQuantity      float64 `json:"max_quantity" binding:"required,gt=0"`
-	RequiresApproval bool    `json:"requires_approval"`
-	IsActive         bool    `json:"is_active"`
+	MedName              string  `json:"med_name" binding:"required,min=1,max=128"`
+	RuleType             string  `json:"rule_type" binding:"required,min=1,max=64"`
+	MaxQuantity          float64 `json:"max_quantity" binding:"required,gt=0"`
+	RequiresApproval     bool    `json:"requires_approval"`
+	RequiresPrescription bool    `json:"requires_prescription"`
+	MinIntervalDays      int     `json:"min_interval_days" binding:"omitempty,gte=1,lte=365"`
+	FeeAmount            float64 `json:"fee_amount" binding:"omitempty,gte=0,lte=999999999"`
+	FeeCurrency          string  `json:"fee_currency" binding:"omitempty,max=8"`
+	IsActive             bool    `json:"is_active"`
+}
+
+func normalizeRestrictionRequest(req *restrictionRequest) {
+	req.MedName = strings.TrimSpace(req.MedName)
+	req.RuleType = strings.TrimSpace(req.RuleType)
+	req.FeeCurrency = strings.ToUpper(strings.TrimSpace(req.FeeCurrency))
+	if req.MinIntervalDays <= 0 {
+		req.MinIntervalDays = 7
+	}
+	if req.FeeCurrency == "" {
+		req.FeeCurrency = "USD"
+	}
 }
 
 func (a *API) CreateRestriction(c *gin.Context) {
@@ -258,23 +283,26 @@ func (a *API) CreateRestriction(c *gin.Context) {
 		badRequest(c, "INVALID_PAYLOAD", "invalid restriction payload")
 		return
 	}
-	if strings.TrimSpace(req.MedName) == "" || strings.TrimSpace(req.RuleType) == "" || req.MaxQuantity <= 0 {
+	normalizeRestrictionRequest(&req)
+	if req.MedName == "" || req.RuleType == "" || req.MaxQuantity <= 0 {
 		badRequest(c, "MISSING_REQUIRED_FIELDS", "med_name, rule_type, and max_quantity are required")
 		return
 	}
 
 	res, err := a.db.Exec(`
 		INSERT INTO restrictions
-		(med_name, rule_type, max_quantity, requires_approval, institution, department, team, is_active, created_by)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, strings.TrimSpace(req.MedName), strings.TrimSpace(req.RuleType), req.MaxQuantity, req.RequiresApproval,
+		(med_name, rule_type, max_quantity, requires_approval, requires_prescription, min_interval_days, fee_amount, fee_currency,
+		 institution, department, team, is_active, created_by)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, req.MedName, req.RuleType, req.MaxQuantity, req.RequiresApproval, req.RequiresPrescription, req.MinIntervalDays, req.FeeAmount, req.FeeCurrency,
 		user.Institution, user.Department, user.Team, req.IsActive, user.ID)
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "DB_ERROR", "failed to create restriction")
 		return
 	}
 	id, _ := res.LastInsertId()
-	a.logAudit(c, user.ID, "compliance.restriction.create", "restrictions", strconv.FormatInt(id, 10), req)
+	after, _ := a.complianceSvc.RestrictionBeforeAfter(c.Request.Context(), id)
+	a.logAuditDetailed(c, user.ID, "compliance", "INFO", "compliance.restriction.create", "restrictions", strconv.FormatInt(id, 10), nil, after, req)
 	writeSuccess(c, http.StatusCreated, gin.H{"id": id})
 }
 
@@ -283,7 +311,8 @@ func (a *API) ListRestrictions(c *gin.Context) {
 	where, args := middleware.BuildScopeWhere(user, "")
 
 	rows, err := a.db.Query(`
-		SELECT id, med_name, rule_type, max_quantity, requires_approval, institution, department, team, is_active, created_at, updated_at
+		SELECT id, med_name, rule_type, max_quantity, requires_approval, requires_prescription,
+		       min_interval_days, fee_amount, fee_currency, institution, department, team, is_active, created_at, updated_at
 		FROM restrictions
 		WHERE `+where+`
 		ORDER BY id DESC
@@ -297,34 +326,43 @@ func (a *API) ListRestrictions(c *gin.Context) {
 	items := make([]gin.H, 0)
 	for rows.Next() {
 		var (
-			id               int64
-			medName          string
-			ruleType         string
-			maxQuantity      float64
-			requiresApproval bool
-			institution      string
-			department       string
-			team             string
-			isActive         bool
-			createdAt        time.Time
-			updatedAt        time.Time
+			id                   int64
+			medName              string
+			ruleType             string
+			maxQuantity          float64
+			requiresApproval     bool
+			requiresPrescription bool
+			minIntervalDays      int
+			feeAmount            float64
+			feeCurrency          string
+			institution          string
+			department           string
+			team                 string
+			isActive             bool
+			createdAt            time.Time
+			updatedAt            time.Time
 		)
-		if err := rows.Scan(&id, &medName, &ruleType, &maxQuantity, &requiresApproval, &institution, &department, &team, &isActive, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&id, &medName, &ruleType, &maxQuantity, &requiresApproval, &requiresPrescription, &minIntervalDays, &feeAmount, &feeCurrency,
+			&institution, &department, &team, &isActive, &createdAt, &updatedAt); err != nil {
 			writeError(c, http.StatusInternalServerError, "DB_ERROR", "failed to scan restrictions")
 			return
 		}
 		items = append(items, gin.H{
-			"id":                id,
-			"med_name":          medName,
-			"rule_type":         ruleType,
-			"max_quantity":      maxQuantity,
-			"requires_approval": requiresApproval,
-			"institution":       institution,
-			"department":        department,
-			"team":              team,
-			"is_active":         isActive,
-			"created_at":        createdAt.Format(time.RFC3339),
-			"updated_at":        updatedAt.Format(time.RFC3339),
+			"id":                    id,
+			"med_name":              medName,
+			"rule_type":             ruleType,
+			"max_quantity":          maxQuantity,
+			"requires_approval":     requiresApproval,
+			"requires_prescription": requiresPrescription,
+			"min_interval_days":     minIntervalDays,
+			"fee_amount":            feeAmount,
+			"fee_currency":          feeCurrency,
+			"institution":           institution,
+			"department":            department,
+			"team":                  team,
+			"is_active":             isActive,
+			"created_at":            createdAt.Format(time.RFC3339),
+			"updated_at":            updatedAt.Format(time.RFC3339),
 		})
 	}
 
@@ -338,11 +376,13 @@ func (a *API) UpdateRestriction(c *gin.Context) {
 		badRequest(c, "INVALID_ID", "invalid restriction id")
 		return
 	}
+
 	var req restrictionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		badRequest(c, "INVALID_PAYLOAD", "invalid restriction payload")
 		return
 	}
+	normalizeRestrictionRequest(&req)
 
 	where, scopeArgs := middleware.BuildScopeWhere(user, "")
 	args := []any{id}
@@ -357,17 +397,21 @@ func (a *API) UpdateRestriction(c *gin.Context) {
 		return
 	}
 
+	before, _ := a.complianceSvc.RestrictionBeforeAfter(c.Request.Context(), id)
 	_, err = a.db.Exec(`
 		UPDATE restrictions
-		SET med_name = ?, rule_type = ?, max_quantity = ?, requires_approval = ?, is_active = ?
+		SET med_name = ?, rule_type = ?, max_quantity = ?, requires_approval = ?, requires_prescription = ?,
+		    min_interval_days = ?, fee_amount = ?, fee_currency = ?, is_active = ?
 		WHERE id = ?
-	`, strings.TrimSpace(req.MedName), strings.TrimSpace(req.RuleType), req.MaxQuantity, req.RequiresApproval, req.IsActive, id)
+	`, req.MedName, req.RuleType, req.MaxQuantity, req.RequiresApproval, req.RequiresPrescription,
+		req.MinIntervalDays, req.FeeAmount, req.FeeCurrency, req.IsActive, id)
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "DB_ERROR", "failed to update restriction")
 		return
 	}
 
-	a.logAudit(c, user.ID, "compliance.restriction.update", "restrictions", strconv.FormatInt(id, 10), req)
+	after, _ := a.complianceSvc.RestrictionBeforeAfter(c.Request.Context(), id)
+	a.logAuditDetailed(c, user.ID, "compliance", "INFO", "compliance.restriction.update", "restrictions", strconv.FormatInt(id, 10), before, after, req)
 	writeSuccess(c, http.StatusOK, gin.H{"id": id})
 }
 
@@ -378,6 +422,8 @@ func (a *API) DeleteRestriction(c *gin.Context) {
 		badRequest(c, "INVALID_ID", "invalid restriction id")
 		return
 	}
+
+	before, _ := a.complianceSvc.RestrictionBeforeAfter(c.Request.Context(), id)
 	where, scopeArgs := middleware.BuildScopeWhere(user, "")
 	args := []any{id}
 	args = append(args, scopeArgs...)
@@ -392,13 +438,16 @@ func (a *API) DeleteRestriction(c *gin.Context) {
 		return
 	}
 
-	a.logAudit(c, user.ID, "compliance.restriction.delete", "restrictions", strconv.FormatInt(id, 10), gin.H{})
+	a.logAuditDetailed(c, user.ID, "compliance", "WARN", "compliance.restriction.delete", "restrictions", strconv.FormatInt(id, 10), before, nil, gin.H{"deleted": true})
 	writeSuccess(c, http.StatusOK, gin.H{"deleted": true})
 }
 
 type restrictionCheckRequest struct {
-	MedName  string  `json:"med_name" binding:"required,min=1,max=128"`
-	Quantity float64 `json:"quantity" binding:"required,gt=0"`
+	MedName                  string  `json:"med_name" binding:"required,min=1,max=128"`
+	Quantity                 float64 `json:"quantity" binding:"required,gt=0"`
+	ClientID                 string  `json:"client_id" binding:"required,min=1,max=64"`
+	PrescriptionAttachmentID int64   `json:"prescription_attachment_id" binding:"omitempty,gte=1"`
+	RecordPurchase           *bool   `json:"record_purchase"`
 }
 
 func (a *API) CheckRestriction(c *gin.Context) {
@@ -408,59 +457,68 @@ func (a *API) CheckRestriction(c *gin.Context) {
 		badRequest(c, "INVALID_PAYLOAD", "invalid check payload")
 		return
 	}
-	if strings.TrimSpace(req.MedName) == "" || req.Quantity <= 0 {
-		badRequest(c, "INVALID_REQUEST", "med_name and positive quantity are required")
+	if strings.TrimSpace(req.MedName) == "" || req.Quantity <= 0 || strings.TrimSpace(req.ClientID) == "" {
+		badRequest(c, "INVALID_REQUEST", "med_name, client_id and positive quantity are required")
 		return
 	}
 
-	where, args := middleware.BuildScopeWhere(user, "")
-	args = append([]any{strings.TrimSpace(req.MedName)}, args...)
-	query := `
-		SELECT id, rule_type, max_quantity, requires_approval, is_active
-		FROM restrictions
-		WHERE med_name = ? AND ` + where + `
-		ORDER BY id DESC LIMIT 1`
+	recordPurchase := true
+	if req.RecordPurchase != nil {
+		recordPurchase = *req.RecordPurchase
+	}
 
-	var (
-		ruleID           int64
-		ruleType         string
-		maxQuantity      float64
-		requiresApproval bool
-		isActive         bool
-	)
-	if err := a.db.QueryRow(query, args...).Scan(&ruleID, &ruleType, &maxQuantity, &requiresApproval, &isActive); err != nil {
-		if err == sql.ErrNoRows {
-			writeSuccess(c, http.StatusOK, gin.H{"allowed": true, "reason": "no active rule"})
-			return
-		}
-		writeError(c, http.StatusInternalServerError, "DB_ERROR", "failed to evaluate restriction")
+	result, err := a.complianceSvc.CheckPurchaseRestriction(c.Request.Context(), user, service.PurchaseCheckInput{
+		MedName:                  req.MedName,
+		Quantity:                 req.Quantity,
+		ClientID:                 req.ClientID,
+		PrescriptionAttachmentID: req.PrescriptionAttachmentID,
+		RecordPurchase:           recordPurchase,
+	})
+	if err != nil {
+		badRequest(c, "CHECK_FAILED", err.Error())
 		return
 	}
 
-	allowed := true
-	reason := "within rule"
-	if !isActive {
-		reason = "rule is inactive"
-	} else if req.Quantity > maxQuantity {
-		allowed = false
-		reason = fmt.Sprintf("quantity %.2f exceeds max %.2f", req.Quantity, maxQuantity)
-	} else if requiresApproval {
-		reason = "requires approval"
-	}
-
-	a.logAudit(c, user.ID, "compliance.restriction.check", "restrictions", strconv.FormatInt(ruleID, 10), gin.H{
-		"med_name":          req.MedName,
-		"quantity":          req.Quantity,
-		"allowed":           allowed,
-		"requires_approval": requiresApproval,
+	a.logAuditDetailed(c, user.ID, "compliance", "INFO", "compliance.restriction.check", "restrictions", strconv.FormatInt(result.RuleID, 10), req, result, gin.H{
+		"record_purchase": recordPurchase,
 	})
-
-	writeSuccess(c, http.StatusOK, gin.H{
-		"rule_id":           ruleID,
-		"rule_type":         ruleType,
-		"max_quantity":      maxQuantity,
-		"requires_approval": requiresApproval,
-		"allowed":           allowed,
-		"reason":            reason,
-	})
+	writeSuccess(c, http.StatusOK, result)
 }
+
+func (a *API) loadQualificationForAudit(ctx context.Context, id int64) (map[string]any, error) {
+	var (
+		entityType        string
+		entityName        string
+		qualificationCode string
+		issueDate         time.Time
+		expiryDate        time.Time
+		status            string
+		notesEnc          sql.NullString
+	)
+	if err := a.db.QueryRowContext(ctx, `
+		SELECT entity_type, entity_name, qualification_code, issue_date, expiry_date, status, notes_enc
+		FROM qualifications
+		WHERE id = ?
+	`, id).Scan(&entityType, &entityName, &qualificationCode, &issueDate, &expiryDate, &status, &notesEnc); err != nil {
+		return nil, err
+	}
+
+	notes := ""
+	if notesEnc.Valid && notesEnc.String != "" {
+		if raw, err := a.cipher.Decrypt(notesEnc.String); err == nil {
+			notes = security.MaskText(raw)
+		}
+	}
+
+	return map[string]any{
+		"entity_type":        entityType,
+		"entity_name":        entityName,
+		"qualification_code": qualificationCode,
+		"issue_date":         issueDate.Format("2006-01-02"),
+		"expiry_date":        expiryDate.Format("2006-01-02"),
+		"status":             status,
+		"notes":              notes,
+	}, nil
+}
+
+var _ = context.Background
